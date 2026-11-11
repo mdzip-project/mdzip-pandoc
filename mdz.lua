@@ -177,6 +177,11 @@ local function image_name(src)
 end
 
 function ByteStringWriter(doc, opts)
+  -- Without -o Pandoc prints the result, and a ZIP is unreadable in a terminal.
+  local out_file = PANDOC_STATE.output_file
+  if out_file == nil or out_file == "-" then
+    error("mdz.lua writes a ZIP archive, so it needs an output file: add -o name.mdz", 0)
+  end
   local files = {}
   local by_src, used = {}, {}
   local missing = {}

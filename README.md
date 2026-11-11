@@ -50,6 +50,8 @@ The result passes `mdz validate`.
 
 ## Development
 
+To try it by hand, follow the test script in [TESTING.md](TESTING.md). The automated tests:
+
 ```sh
 PANDOC=pandoc pandoc lua tests/run.lua
 ```

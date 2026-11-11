@@ -207,6 +207,13 @@ pandoc.system.with_temporary_directory("mdz-lua-tests", function(tmp)
     has(out, "valid")
   end)
 
+  check("write: without -o, stops instead of printing the ZIP", function()
+    local ok, out = run(q(t("doc.md")) .. " -t mdz.lua")
+    eq(ok, false, "exit status")
+    has(out, "add -o name.mdz")
+    lacks(out, "PK\3\4", "ZIP bytes")
+  end)
+
   check("write: Word to .mdz takes images from the media bag", function()
     pandoc_ok(q(t("doc.md")) .. " -o " .. q(t("doc.docx")))
     pandoc_ok(q(t("doc.docx")) .. " -t mdz.lua -o " .. q(t("from-docx.mdz")))

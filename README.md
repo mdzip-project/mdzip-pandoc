@@ -79,6 +79,7 @@ Or a folder of `.mdz` pages into a website, each page put into your own [Pandoc 
 | `output` | | The file to write. Its extension picks the format: `.html`, `.docx`, `.epub`, `.pdf` (needs a PDF engine on the runner), or `.mdz`. When `input` is a folder, the folder to write to, with the same subfolders. Missing folders are created. |
 | `extension` | `html` | When `input` is a folder, the format to convert each `.mdz` to, as a file extension (`html`, `docx`, `epub`, ...). |
 | `site-url` | | When a folder is converted to HTML: the address it's published at, such as `https://you.github.io/repo/`. The action then writes `sitemap.xml` (each page's address, with its last-changed date when there's git history) and `robots.txt`, and gives each page `page-url` (its full address) and `site-url` for its template. A top-level `404.mdz` is left out of the sitemap and gets no `page-url`. |
+| `images` | `files` | For HTML made from an `.mdz`: `files` writes each picture once to an `images/` folder (next to the page, or at the top of `output` for a folder), named by its contents, and points the pages at it. `embed` leaves pictures to Pandoc: add `--embed-resources` to build them into each page. |
 | `args` | | Extra Pandoc options, such as `--standalone --embed-resources` for self-contained HTML pages, `--template`, `--css` or `--toc`. They're split on spaces, so a value can't contain one. |
 | `pandoc-version` | | Pandoc to install, 3.0 or later. Empty uses the runner's Pandoc if it has one, otherwise installs 3.13, the version this is tested with. |
 | `core-lua-version` | `v0.1.0` | The mdzip-core-lua release to use. |
@@ -86,6 +87,8 @@ Or a folder of `.mdz` pages into a website, each page put into your own [Pandoc 
 The `output` output is the path written. One of `input` and `output` must be an `.mdz`.
 
 In HTML output, links between `.mdz` files become links between the pages made from them: `guide.mdz#install` becomes `guide.html#install`. The action does this with [`mdz-links.lua`](mdz-links.lua), a Pandoc filter you can also use on its own (`--lua-filter mdz-links.lua`). Links in raw HTML (`<a href="...">`) aren't changed.
+
+Pictures in HTML output are files, not built into the page: [`mdz-images.lua`](mdz-images.lua), another filter, writes each picture from the archive to `images/<hash>.<ext>` and points the page at it. A picture used on several pages is stored once, and browsers download it once. It covers Markdown images and the `<img align="...">` tags MDZip Studio writes, which Pandoc's own `--extract-media` leaves pointing at the old place. It marks the tags `data-external="1"`, so `--embed-resources` still builds the style sheet into each page but leaves the pictures as files. On its own: `pandoc -f mdz.lua --lua-filter mdz-images.lua guide.mdz -s -o site/guide.html` writes `site/images/`.
 
 Pandoc is installed with the official [`pandoc/actions/setup`](https://github.com/pandoc/actions), whose Linux install is x64 only; on a runner it doesn't support, install Pandoc in an earlier step. To check archives before converting them, add [setup-mdz](https://github.com/mdzip-project/setup-mdz) and run `mdz validate`.
 

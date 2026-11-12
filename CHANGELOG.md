@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0] - 2026-11-12
+
+- `mdz-images.lua`, a Pandoc filter: in HTML output, each picture from the
+  archive is written once to `images/<hash>.<ext>` and the page points to it,
+  for Markdown images and for `<img>`/`<source>` tags in raw HTML (which
+  `--extract-media` doesn't update). Tags are marked `data-external="1"` so
+  `--embed-resources` leaves them as files.
+- GitHub Action: new `images` input. `files` (the default) applies
+  `mdz-images.lua`, with one shared `images/` folder when converting a folder;
+  `embed` keeps the old behaviour, where `--embed-resources` builds pictures
+  into each page.
+
 ## [0.3.0] - 2026-11-12
 
 - GitHub Action: new `site-url` input. When a folder is converted to HTML,

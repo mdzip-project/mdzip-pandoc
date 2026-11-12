@@ -31,6 +31,14 @@ inputs:
       and "site-url" for its template.
     required: false
     default: ""
+  images:
+    description: >
+      For HTML made from an .mdz: "files" (the default) writes each picture
+      once to an images folder, named by its contents, and points the pages
+      at it; "embed" leaves pictures to Pandoc (use --embed-resources to build
+      them into each page).
+    required: false
+    default: files
   args:
     description: >
       Extra Pandoc options, such as "--standalone --embed-resources" for one
@@ -100,6 +108,7 @@ runs:
         OUTPUT: ${{ inputs.output }}
         EXTENSION: ${{ inputs.extension }}
         SITE_URL: ${{ inputs.site-url }}
+        IMAGES: ${{ inputs.images }}
         ARGS: ${{ inputs.args }}
       run: |
         set -euo pipefail
@@ -109,26 +118,36 @@ runs:
         lower() { printf %s "$1" | tr '[:upper:]' '[:lower:]'; }
         lua=$(native "$GITHUB_ACTION_PATH/mdz.lua")
         links=$(native "$GITHUB_ACTION_PATH/mdz-links.lua")
+        images=$(native "$GITHUB_ACTION_PATH/mdz-images.lua")
 
         site=""
         [ -z "$SITE_URL" ] || site="${SITE_URL%/}/"
         xml() { printf %s "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 
+        case "$IMAGES" in files|embed) ;; *) fail "images must be files or embed, not '$IMAGES'" ;; esac
+
         # Read with mdz.lua when the input is an .mdz (and turn links to other
         # .mdz files into links to their pages), write with it when the output is.
-        # The third argument, if any, is the page's address.
+        # The third argument, if any, is the page's address; the fourth, how the
+        # page refers to the shared images folder (when a folder is converted).
         convert() {
-          local in=$1 out=$2 url=${3:-}
+          local in=$1 out=$2 url=${3:-} pics=${4:-images/}
           set --
           case "$(lower "$in")" in *.mdz) set -- "$@" -f "$lua" --lua-filter "$links" ;; esac
           case "$(lower "$out")" in *.mdz) set -- "$@" -t "$lua" ;; esac
           [ $# -gt 0 ] || fail "input or output must be an .mdz file"
+          # HTML from an .mdz: pictures become files in images/, named by their contents.
+          if [ "$IMAGES" = files ]; then
+            case "$(lower "$in"):$(lower "$out")" in
+              *.mdz:*.html|*.mdz:*.htm) set -- "$@" --lua-filter "$images" ;;
+            esac
+          fi
           [ -z "$site" ] || set -- "$@" -M "site-url=$site"
           [ -z "$url" ] || set -- "$@" -M "page-url=$url"
           mkdir -p "$(dirname "$out")"
           # ARGS is split on spaces on purpose: it holds several options.
           # shellcheck disable=SC2086
-          pandoc "$@" "$in" -o "$out" $ARGS
+          MDZ_IMAGES_URL="$pics" pandoc "$@" "$in" -o "$out" $ARGS
           echo "Wrote $out"
         }
 
@@ -136,6 +155,9 @@ runs:
           input=${INPUT%/}; output=${OUTPUT%/}; ext=${EXTENSION#.}
           [ ! -e "$output" ] || [ -d "$output" ] || fail "input is a folder, so output '$OUTPUT' must be a folder too"
           [ "$(lower "$ext")" != mdz ] || fail "extension can't be mdz: the input files already are"
+          # Every page shares one images folder at the top of the output.
+          mkdir -p "$output"
+          MDZ_IMAGES_DIR=$(native "$output/images"); export MDZ_IMAGES_DIR
           web=false
           [ -n "$site" ] && [ "$(lower "$ext")" = html ] && web=true
           urls="${RUNNER_TEMP:-/tmp}/mdzip-pandoc-urls.txt"
@@ -158,7 +180,11 @@ runs:
                 printf '%s\t%s\n' "$url" "$date" >> "$urls"
               fi
             fi
-            convert "$file" "$output/$page" "$url"
+            # From docs/setup.html, the images folder is ../images/.
+            slashes=${page//[^\/]/}
+            pics=images/
+            i=0; while [ "$i" -lt "${#slashes}" ]; do pics="../$pics"; i=$((i + 1)); done
+            convert "$file" "$output/$page" "$url" "$pics"
             count=$((count + 1))
           done < <(find "$input" -type f \( -name '*.mdz' -o -name '*.MDZ' \) | sort)
           [ "$count" -gt 0 ] || fail "no .mdz files in '$INPUT'"

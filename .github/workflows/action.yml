@@ -52,7 +52,27 @@ jobs:
           cat list.txt
           grep -q 'images/dot.png' list.txt
           grep -q 'Test note' out/site/note.html
-          grep -q 'data:image/png;base64' out/site/note.html
+          # The picture is a file named by its contents, not built in.
+          ls out/site/images
+          test "$(ls out/site/images/*.png | wc -l)" -eq 1
+          grep -Eq 'src="images/[0-9a-f]{12}[.]png"' out/site/note.html
+          ! grep -q 'data:image/png' out/site/note.html
+          echo "OK"
+
+      - name: Convert .mdz to HTML with pictures built in
+        uses: ./
+        with:
+          input: out/note.mdz
+          output: out/embedded/note.html
+          images: embed
+          args: --standalone --embed-resources
+
+      - name: Check the picture is built in
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'data:image/png;base64' out/embedded/note.html
+          test ! -e out/embedded/images
           echo "OK"
 
       - name: Make a second page that links to the first
@@ -61,7 +81,7 @@ jobs:
           mkdir -p work/site-src/docs
           cp out/note.mdz work/site-src/note.mdz
           printf '# Home\n\nSee [the note](note.mdz) and [setup](docs/setup.mdz#install).\n' > work/home.md
-          printf '# Setup\n\n## Install\n\nBack [home](../index.mdz).\n' > work/setup.md
+          printf '# Setup\n\n## Install\n\nBack [home](../index.mdz).\n\n![The same dot](img/dot.png)\n' > work/setup.md
           printf '<html><head><title>$pagetitle$</title></head><body><p>page=$page-url$ site=$site-url$</p>$body$</body></html>\n' > work/t.html
 
       - name: Package them
@@ -75,6 +95,7 @@ jobs:
         with:
           input: work/setup.md
           output: work/site-src/docs/setup.mdz
+          args: --resource-path=work
 
       - name: Convert a folder
         id: folder
@@ -95,7 +116,10 @@ jobs:
           grep -q 'href="note.html"' out/web/index.html
           grep -q 'href="docs/setup.html#install"' out/web/index.html
           grep -q 'href="../index.html"' out/web/docs/setup.html
-          grep -q 'data:image/png;base64' out/web/note.html
+          # Both pages use the same picture: stored once, at the top.
+          test "$(ls out/web/images/*.png | wc -l)" -eq 1
+          grep -Eq 'src="images/[0-9a-f]{12}[.]png"' out/web/note.html
+          grep -Eq 'src="[.][.]/images/[0-9a-f]{12}[.]png"' out/web/docs/setup.html
           echo "OK"
 
       - name: Convert a folder as a website

@@ -89,13 +89,14 @@ runs:
         [ -f "$INPUT" ] || { echo "::error title=mdzip-pandoc::input '$INPUT' not found"; exit 1; }
         mkdir -p "$(dirname "$OUTPUT")"
         # Read with mdz.lua when the input is an .mdz, write with it when the output is.
-        from=(); to=()
-        # tr, not ${x,,}: macOS runners have bash 3.2.
-        case "$(printf %s "$INPUT" | tr '[:upper:]' '[:lower:]')" in *.mdz) from=(-f "$lua") ;; esac
-        case "$(printf %s "$OUTPUT" | tr '[:upper:]' '[:lower:]')" in *.mdz) to=(-t "$lua") ;; esac
-        [ ${#from[@]} -gt 0 ] || [ ${#to[@]} -gt 0 ] || { echo "::error title=mdzip-pandoc::input or output must be an .mdz file"; exit 1; }
+        # Plain sh only: macOS runners have bash 3.2 (no ${x,,}, empty arrays trip set -u).
+        lower() { printf %s "$1" | tr '[:upper:]' '[:lower:]'; }
+        set --
+        case "$(lower "$INPUT")" in *.mdz) set -- "$@" -f "$lua" ;; esac
+        case "$(lower "$OUTPUT")" in *.mdz) set -- "$@" -t "$lua" ;; esac
+        [ $# -gt 0 ] || { echo "::error title=mdzip-pandoc::input or output must be an .mdz file"; exit 1; }
         # ARGS is split on spaces on purpose: it holds several options.
         # shellcheck disable=SC2086
-        pandoc "${from[@]}" "${to[@]}" "$INPUT" -o "$OUTPUT" $ARGS
+        pandoc "$@" "$INPUT" -o "$OUTPUT" $ARGS
         echo "output=$OUTPUT" >> "$GITHUB_OUTPUT"
         echo "Wrote $OUTPUT"

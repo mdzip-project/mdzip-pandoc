@@ -60,16 +60,8 @@ jobs:
         run: |
           mkdir -p work/site-src/docs
           cp out/note.mdz work/site-src/note.mdz
-          printf '# Home
-
-See [the note](note.mdz) and [setup](docs/setup.mdz#install).
-' > work/home.md
-          printf '# Setup
-
-## Install
-
-Back [home](../index.mdz).
-' > work/setup.md
+          printf '# Home\n\nSee [the note](note.mdz) and [setup](docs/setup.mdz#install).\n' > work/home.md
+          printf '# Setup\n\n## Install\n\nBack [home](../index.mdz).\n' > work/setup.md
 
       - name: Package them
         uses: ./

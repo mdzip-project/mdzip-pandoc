@@ -48,6 +48,29 @@ Raw HTML in the archive passes through to HTML output, as it does with Pandoc's 
 
 The result passes `mdz validate`.
 
+## GitHub Action
+
+The repository is also a GitHub Action that converts one file in a workflow. It installs Pandoc (unless the runner already has it), downloads mdzip-core-lua and runs `mdz.lua`. For example, to turn an `.mdz` into a web page:
+
+```yaml
+- uses: actions/checkout@v5
+- uses: mdzip-project/mdzip-pandoc@v0
+  with:
+    input: docs/guide.mdz
+    output: site/guide.html
+    args: --standalone --embed-resources
+```
+
+| Input | Default | What it does |
+|---|---|---|
+| `input` | | The file to convert. An `.mdz` is read with `mdz.lua`; any other file Pandoc reads (`.md`, `.docx`, ...) can be packaged as an `.mdz`. |
+| `output` | | The file to write. Its extension picks the format: `.html`, `.docx`, `.epub`, `.pdf` (needs a PDF engine on the runner), or `.mdz`. Missing folders are created. |
+| `args` | | Extra Pandoc options, such as `--standalone --embed-resources` for one self-contained HTML file, `--toc`, or `--extract-media=site/media` to keep images as separate files. |
+| `pandoc-version` | | Pandoc to install, 3.0 or later. Empty uses the runner's Pandoc if it has one, otherwise installs 3.13, the version this is tested with. |
+| `core-lua-version` | `v0.1.0` | The mdzip-core-lua release to use. |
+
+The `output` output is the path written. One of `input` and `output` must be an `.mdz`. Pandoc is installed with the official [`pandoc/actions/setup`](https://github.com/pandoc/actions), whose Linux install is x64 only; on a runner it doesn't support, install Pandoc in an earlier step. To check an archive before converting it, add [setup-mdz](https://github.com/mdzip-project/setup-mdz) and run `mdz validate`.
+
 ## Development
 
 To try it by hand, follow the test script in [TESTING.md](TESTING.md). The automated tests:
@@ -61,7 +84,7 @@ The tests run real `pandoc` commands with `mdz.lua` and check the results with m
 ## What's left to do
 
 - Bundle mdzip-core-lua into a release download, so `mdz.lua` works without a separate checkout. For now it uses a local copy.
-- CI, once mdzip-core-lua is published.
+- CI for the Lua tests (the GitHub Action has its own test workflow).
 - Converting a document other than the entry point (an option naming it), and project-mode archives as a whole.
 - Packaging local Markdown files the document links to, not only images.
 

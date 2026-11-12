@@ -13,3 +13,6 @@ First version: `mdz.lua`, a Pandoc 3 custom reader and writer on mdzip-core-lua.
   title, author, language, description and keywords in the manifest.
 - Writing without `-o` stops with a message instead of printing the ZIP to
   the terminal.
+- GitHub Action (`action.yml`): converts one file to or from `.mdz` in a
+  workflow. Installs Pandoc if needed (official `pandoc/actions/setup`),
+  downloads a pinned mdzip-core-lua release, and runs `mdz.lua`.

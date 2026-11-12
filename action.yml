@@ -1,0 +1,100 @@
+name: MDZip Pandoc
+description: Convert MDZip (.mdz) files with Pandoc, images included, to HTML, Word, EPUB, PDF and more, or package documents as .mdz.
+author: MDZip project
+branding:
+  icon: file-text
+  color: gray-dark
+
+inputs:
+  input:
+    description: The file to convert, such as docs/guide.mdz (or a .md/.docx to package as .mdz).
+    required: true
+  output:
+    description: >
+      The file to write. Its extension picks the format (.html, .docx, .epub,
+      .pdf, ... or .mdz); missing folders are created.
+    required: true
+  args:
+    description: >
+      Extra Pandoc options, such as "--standalone --embed-resources" for one
+      self-contained HTML file, or "--toc".
+    required: false
+    default: ""
+  pandoc-version:
+    description: Pandoc version to install (3.0 or later). Leave empty to use a Pandoc that's already on PATH, or install the tested version if there isn't one.
+    required: false
+    default: ""
+  core-lua-version:
+    description: mdzip-core-lua release that mdz.lua reads and writes archives with.
+    required: false
+    default: v0.1.0
+
+outputs:
+  output:
+    description: The path of the file that was written.
+    value: ${{ steps.convert.outputs.output }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check for Pandoc
+      id: pandoc
+      shell: bash
+      env:
+        WANTED: ${{ inputs.pandoc-version }}
+      run: |
+        if [ -z "$WANTED" ] && command -v pandoc >/dev/null; then
+          echo "install=false" >> "$GITHUB_OUTPUT"
+          echo "Using $(pandoc --version | head -1)"
+        else
+          echo "install=true" >> "$GITHUB_OUTPUT"
+          echo "version=${WANTED:-3.13}" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Install Pandoc
+      if: steps.pandoc.outputs.install == 'true'
+      uses: pandoc/actions/setup@v1
+      with:
+        version: ${{ steps.pandoc.outputs.version }}
+
+    - name: Get mdzip-core-lua
+      shell: bash
+      env:
+        CORE_LUA: ${{ inputs.core-lua-version }}
+      run: |
+        set -euo pipefail
+        dir="$RUNNER_TEMP/mdzip-core-lua-$CORE_LUA"
+        [ "$RUNNER_OS" = Windows ] && dir=$(cygpath -u "$dir")
+        if [ ! -d "$dir/src/mdzip" ]; then
+          mkdir -p "$dir"
+          curl -fsSL --retry 3 "https://codeload.github.com/mdzip-project/mdzip-core-lua/tar.gz/refs/tags/$CORE_LUA" \
+            | tar -xz -C "$dir" --strip-components=1 \
+            || { echo "::error title=mdzip-pandoc::couldn't download mdzip-core-lua $CORE_LUA"; exit 1; }
+        fi
+        src="$dir/src"
+        [ "$RUNNER_OS" = Windows ] && src=$(cygpath -w "$src")
+        echo "MDZIP_LUA_PATH=$src" >> "$GITHUB_ENV"
+
+    - name: Convert
+      id: convert
+      shell: bash
+      env:
+        INPUT: ${{ inputs.input }}
+        OUTPUT: ${{ inputs.output }}
+        ARGS: ${{ inputs.args }}
+      run: |
+        set -euo pipefail
+        lua="$GITHUB_ACTION_PATH/mdz.lua"
+        [ "$RUNNER_OS" = Windows ] && lua=$(cygpath -w "$lua")
+        [ -f "$INPUT" ] || { echo "::error title=mdzip-pandoc::input '$INPUT' not found"; exit 1; }
+        mkdir -p "$(dirname "$OUTPUT")"
+        # Read with mdz.lua when the input is an .mdz, write with it when the output is.
+        from=(); to=()
+        case "${INPUT,,}" in *.mdz) from=(-f "$lua") ;; esac
+        case "${OUTPUT,,}" in *.mdz) to=(-t "$lua") ;; esac
+        [ ${#from[@]} -gt 0 ] || [ ${#to[@]} -gt 0 ] || { echo "::error title=mdzip-pandoc::input or output must be an .mdz file"; exit 1; }
+        # ARGS is split on spaces on purpose: it holds several options.
+        # shellcheck disable=SC2086
+        pandoc "${from[@]}" "${to[@]}" "$INPUT" -o "$OUTPUT" $ARGS
+        echo "output=$OUTPUT" >> "$GITHUB_OUTPUT"
+        echo "Wrote $OUTPUT"

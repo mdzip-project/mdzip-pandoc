@@ -1,0 +1,84 @@
+name: Test action
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  convert:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Make a note with an image
+        shell: bash
+        run: |
+          mkdir -p work/img
+          # A 1x1 PNG.
+          echo 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==' | base64 -d > work/img/dot.png
+          printf '# Test note\n\nSome text.\n\n![A dot](img/dot.png)\n' > work/note.md
+
+      - name: Package .md as .mdz
+        id: pack
+        uses: ./
+        with:
+          input: work/note.md
+          output: out/note.mdz
+          args: --resource-path=work
+
+      - name: Convert .mdz to HTML
+        id: html
+        uses: ./
+        with:
+          input: ${{ steps.pack.outputs.output }}
+          output: out/site/note.html
+          args: --standalone --embed-resources
+
+      - name: Check the results
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ steps.html.outputs.output }}" = out/site/note.html
+          unzip -l out/note.mdz | tee /dev/stderr | grep -q 'images/dot.png'
+          grep -q 'Test note' out/site/note.html
+          grep -q 'data:image/png;base64' out/site/note.html
+          echo "OK"
+
+      - name: Second run reuses Pandoc and mdzip-core-lua
+        uses: ./
+        with:
+          input: out/note.mdz
+          output: out/note.docx
+
+  errors:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: printf '# x\n' > plain.md
+      - name: Neither file is .mdz
+        id: neither
+        continue-on-error: true
+        uses: ./
+        with:
+          input: plain.md
+          output: plain.html
+      - name: Missing input
+        id: missing
+        continue-on-error: true
+        uses: ./
+        with:
+          input: nope.mdz
+          output: nope.html
+      - name: Both should have failed
+        run: |
+          test "${{ steps.neither.outcome }}" = failure
+          test "${{ steps.missing.outcome }}" = failure

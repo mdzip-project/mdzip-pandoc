@@ -48,7 +48,9 @@ jobs:
         run: |
           set -euo pipefail
           test "${{ steps.html.outputs.output }}" = out/site/note.html
-          unzip -l out/note.mdz | tee /dev/stderr | grep -q 'images/dot.png'
+          unzip -l out/note.mdz > list.txt
+          cat list.txt
+          grep -q 'images/dot.png' list.txt
           grep -q 'Test note' out/site/note.html
           grep -q 'data:image/png;base64' out/site/note.html
           echo "OK"

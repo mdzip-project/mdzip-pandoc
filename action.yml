@@ -90,8 +90,9 @@ runs:
         mkdir -p "$(dirname "$OUTPUT")"
         # Read with mdz.lua when the input is an .mdz, write with it when the output is.
         from=(); to=()
-        case "${INPUT,,}" in *.mdz) from=(-f "$lua") ;; esac
-        case "${OUTPUT,,}" in *.mdz) to=(-t "$lua") ;; esac
+        # tr, not ${x,,}: macOS runners have bash 3.2.
+        case "$(printf %s "$INPUT" | tr '[:upper:]' '[:lower:]')" in *.mdz) from=(-f "$lua") ;; esac
+        case "$(printf %s "$OUTPUT" | tr '[:upper:]' '[:lower:]')" in *.mdz) to=(-t "$lua") ;; esac
         [ ${#from[@]} -gt 0 ] || [ ${#to[@]} -gt 0 ] || { echo "::error title=mdzip-pandoc::input or output must be an .mdz file"; exit 1; }
         # ARGS is split on spaces on purpose: it holds several options.
         # shellcheck disable=SC2086

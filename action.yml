@@ -22,6 +22,15 @@ inputs:
     description: When input is a folder, the format each .mdz is converted to, as a file extension.
     required: false
     default: html
+  site-url:
+    description: >
+      The address the converted folder is published at, such as
+      https://example.org/ or https://you.github.io/repo/. When set, with a
+      folder converted to html, the action writes sitemap.xml and robots.txt,
+      and gives each page "page-url" (its full address, for a canonical link)
+      and "site-url" for its template.
+    required: false
+    default: ""
   args:
     description: >
       Extra Pandoc options, such as "--standalone --embed-resources" for one
@@ -90,6 +99,7 @@ runs:
         INPUT: ${{ inputs.input }}
         OUTPUT: ${{ inputs.output }}
         EXTENSION: ${{ inputs.extension }}
+        SITE_URL: ${{ inputs.site-url }}
         ARGS: ${{ inputs.args }}
       run: |
         set -euo pipefail
@@ -100,14 +110,21 @@ runs:
         lua=$(native "$GITHUB_ACTION_PATH/mdz.lua")
         links=$(native "$GITHUB_ACTION_PATH/mdz-links.lua")
 
+        site=""
+        [ -z "$SITE_URL" ] || site="${SITE_URL%/}/"
+        xml() { printf %s "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+
         # Read with mdz.lua when the input is an .mdz (and turn links to other
         # .mdz files into links to their pages), write with it when the output is.
+        # The third argument, if any, is the page's address.
         convert() {
-          local in=$1 out=$2
+          local in=$1 out=$2 url=${3:-}
           set --
           case "$(lower "$in")" in *.mdz) set -- "$@" -f "$lua" --lua-filter "$links" ;; esac
           case "$(lower "$out")" in *.mdz) set -- "$@" -t "$lua" ;; esac
           [ $# -gt 0 ] || fail "input or output must be an .mdz file"
+          [ -z "$site" ] || set -- "$@" -M "site-url=$site"
+          [ -z "$url" ] || set -- "$@" -M "page-url=$url"
           mkdir -p "$(dirname "$out")"
           # ARGS is split on spaces on purpose: it holds several options.
           # shellcheck disable=SC2086
@@ -119,14 +136,49 @@ runs:
           input=${INPUT%/}; output=${OUTPUT%/}; ext=${EXTENSION#.}
           [ ! -e "$output" ] || [ -d "$output" ] || fail "input is a folder, so output '$OUTPUT' must be a folder too"
           [ "$(lower "$ext")" != mdz ] || fail "extension can't be mdz: the input files already are"
+          web=false
+          [ -n "$site" ] && [ "$(lower "$ext")" = html ] && web=true
+          urls="${RUNNER_TEMP:-/tmp}/mdzip-pandoc-urls.txt"
+          : > "$urls"
           count=0
           while IFS= read -r file; do
             rel=${file#"$input"/}
-            convert "$file" "$output/${rel%.*}.$ext"
+            page="${rel%.*}.$ext"
+            url=""
+            if $web; then
+              case "$page" in
+                404.html) ;;                                  # GitHub Pages' "not found" page
+                index.html) url=$site ;;
+                */index.html) url="$site${page%index.html}" ;;
+                *) url="$site$page" ;;
+              esac
+              if [ -n "$url" ]; then
+                # Last changed: the page's last commit, when there's git history.
+                date=$(git log -1 --format=%cs -- "$file" 2>/dev/null || true)
+                printf '%s\t%s\n' "$url" "$date" >> "$urls"
+              fi
+            fi
+            convert "$file" "$output/$page" "$url"
             count=$((count + 1))
           done < <(find "$input" -type f \( -name '*.mdz' -o -name '*.MDZ' \) | sort)
           [ "$count" -gt 0 ] || fail "no .mdz files in '$INPUT'"
           [ "$count" -eq 1 ] && echo "Converted 1 file" || echo "Converted $count files"
+          if $web; then
+            {
+              echo '<?xml version="1.0" encoding="UTF-8"?>'
+              echo '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+              while IFS="$(printf '\t')" read -r url date; do
+                if [ -n "$date" ]; then
+                  echo "  <url><loc>$(xml "$url")</loc><lastmod>$date</lastmod></url>"
+                else
+                  echo "  <url><loc>$(xml "$url")</loc></url>"
+                fi
+              done < "$urls"
+              echo '</urlset>'
+            } > "$output/sitemap.xml"
+            printf 'User-agent: *\nAllow: /\n\nSitemap: %ssitemap.xml\n' "$site" > "$output/robots.txt"
+            echo "Wrote $output/sitemap.xml and $output/robots.txt"
+          fi
         else
           [ -f "$INPUT" ] || fail "input '$INPUT' not found"
           convert "$INPUT" "$OUTPUT"

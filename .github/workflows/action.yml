@@ -62,6 +62,7 @@ jobs:
           cp out/note.mdz work/site-src/note.mdz
           printf '# Home\n\nSee [the note](note.mdz) and [setup](docs/setup.mdz#install).\n' > work/home.md
           printf '# Setup\n\n## Install\n\nBack [home](../index.mdz).\n' > work/setup.md
+          printf '<html><head><title>$pagetitle$</title></head><body><p>page=$page-url$ site=$site-url$</p>$body$</body></html>\n' > work/t.html
 
       - name: Package them
         uses: ./
@@ -95,6 +96,26 @@ jobs:
           grep -q 'href="docs/setup.html#install"' out/web/index.html
           grep -q 'href="../index.html"' out/web/docs/setup.html
           grep -q 'data:image/png;base64' out/web/note.html
+          echo "OK"
+
+      - name: Convert a folder as a website
+        uses: ./
+        with:
+          input: work/site-src
+          output: out/site
+          site-url: https://example.org/docs
+          args: --standalone --template=work/t.html
+
+      - name: Check the sitemap and page addresses
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat out/site/sitemap.xml out/site/robots.txt
+          grep -q '<loc>https://example.org/docs/</loc>' out/site/sitemap.xml
+          grep -q '<loc>https://example.org/docs/note.html</loc>' out/site/sitemap.xml
+          grep -q '<loc>https://example.org/docs/docs/setup.html</loc>' out/site/sitemap.xml
+          grep -q 'Sitemap: https://example.org/docs/sitemap.xml' out/site/robots.txt
+          grep -q 'page=https://example.org/docs/docs/setup.html site=https://example.org/docs/' out/site/docs/setup.html
           echo "OK"
 
       - name: Convert a folder to Word

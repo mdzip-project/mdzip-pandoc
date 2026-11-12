@@ -71,13 +71,14 @@ Or a folder of `.mdz` pages into a website, each page put into your own [Pandoc 
     args: --standalone --embed-resources --template=site/template.html --css=site/style.css
 ```
 
-[mdzip-pages-example](https://github.com/mdzip-project/mdzip-pages-example) is a whole site built this way and published on GitHub Pages.
+[mdzip-pages-example](https://github.com/mdzip-project/mdzip-pages-example) is a whole site built this way and published on GitHub Pages, with a sitemap, canonical addresses and Open Graph tags. Its [template](https://github.com/mdzip-project/mdzip-pages-example/blob/main/site/template.html) shows how to use `page-url`. With `--embed-resources`, mark the canonical link `data-external="1"`, or Pandoc tries to download the page and embed it.
 
 | Input | Default | What it does |
 |---|---|---|
 | `input` | | The file to convert. An `.mdz` is read with `mdz.lua`; any other file Pandoc reads (`.md`, `.docx`, ...) can be packaged as an `.mdz`. Or a folder: every `.mdz` in it and its subfolders is converted. |
 | `output` | | The file to write. Its extension picks the format: `.html`, `.docx`, `.epub`, `.pdf` (needs a PDF engine on the runner), or `.mdz`. When `input` is a folder, the folder to write to, with the same subfolders. Missing folders are created. |
 | `extension` | `html` | When `input` is a folder, the format to convert each `.mdz` to, as a file extension (`html`, `docx`, `epub`, ...). |
+| `site-url` | | When a folder is converted to HTML: the address it's published at, such as `https://you.github.io/repo/`. The action then writes `sitemap.xml` (each page's address, with its last-changed date when there's git history) and `robots.txt`, and gives each page `page-url` (its full address) and `site-url` for its template. A top-level `404.mdz` is left out of the sitemap and gets no `page-url`. |
 | `args` | | Extra Pandoc options, such as `--standalone --embed-resources` for self-contained HTML pages, `--template`, `--css` or `--toc`. They're split on spaces, so a value can't contain one. |
 | `pandoc-version` | | Pandoc to install, 3.0 or later. Empty uses the runner's Pandoc if it has one, otherwise installs 3.13, the version this is tested with. |
 | `core-lua-version` | `v0.1.0` | The mdzip-core-lua release to use. |

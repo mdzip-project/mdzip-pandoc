@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0] - 2026-11-12
+
+- GitHub Action: new `site-url` input. When a folder is converted to HTML,
+  the action writes `sitemap.xml` (with each page's last-changed date from
+  git) and `robots.txt`, and passes each page its address as `page-url`
+  (and `site-url`) for canonical links and Open Graph tags in the template.
+
 ## [0.2.0] - 2026-11-12
 
 - GitHub Action: `input` can be a folder. Every `.mdz` in it and its

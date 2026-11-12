@@ -125,6 +125,51 @@ pandoc.system.with_temporary_directory("mdz-lua-tests", function(tmp)
     has(embedded, "data:image/png;base64,")
   end)
 
+  local covered = assert(mdzip.create({
+    files = {
+      { path = "index.md", text = "# Covered\n\nText.\n" },
+      { path = "images/cover.png", data = PNG },
+    },
+    title = "Covered",
+    manifest = { cover = "./images/cover.png" },
+  }))
+  write_file(t("covered.mdz"), covered)
+
+  check("read: manifest cover becomes the cover metadata", function()
+    local out = pandoc_ok("-f mdz.lua " .. q(t("covered.mdz")) .. " -t markdown -s")
+    has(out, "cover: images/cover.png")
+    -- Not cover-image, which would send the EPUB writer looking on disk.
+    pandoc_ok("-f mdz.lua " .. q(t("covered.mdz")) .. " -o " .. q(t("covered.epub")))
+  end)
+
+  check("read: a missing cover is ignored with a warning", function()
+    -- Built by hand: the core won't write an archive whose cover is missing.
+    local function item(name, content)
+      local method, compressed, crc, size = zip.pack_content(name, content)
+      local mtime, mdate = zip.dos_time(os.time())
+      return { name = name, method = method, compressed = compressed, crc = crc, usize = size, mtime = mtime, mdate = mdate }
+    end
+    write_file(t("nocover.mdz"), zip.write({
+      item("index.md", "# No cover\n"),
+      item("manifest.json", '{"spec":{"version":"1.2.0"},"mode":"document","entryPoint":"index.md","cover":"images/gone.png"}'),
+    }))
+    local out = pandoc_ok("-f mdz.lua " .. q(t("nocover.mdz")) .. " -t markdown -s")
+    lacks(out, "cover:")
+    has(out, "images/gone.png", "warning names the file")
+  end)
+
+  check("mdz-images.lua: the cover is published with a full address", function()
+    write_file(t("cover.tpl"), "[$cover$] [$cover-url$]\n")
+    pandoc_ok("-f mdz.lua --lua-filter mdz-images.lua " .. q(t("covered.mdz"))
+      .. " -M page-url=https://example.org/docs/page.html --template=" .. q(t("cover.tpl"))
+      .. " -o " .. q(t("site/page.html")))
+    local out = read_file(t("site/page.html"))
+    local name = out:match("%[images/(%x+%.png)%]")
+    assert(name, "cover points to images/<hash>.png:\n" .. out)
+    has(out, "[https://example.org/docs/images/" .. name .. "]")
+    eq(read_file(t("site/images/" .. name)), PNG)
+  end)
+
   check("read: -raw_html drops raw HTML (hostile-content.mdz)", function()
     local with = pandoc_ok("-f mdz.lua " .. q(FIX .. "hostile-content.mdz") .. " -t html")
     has(with, "<script", "raw HTML passes through by default, as with Pandoc's own Markdown")

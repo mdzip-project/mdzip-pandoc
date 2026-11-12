@@ -151,6 +151,21 @@ function ByteStringReader(input, opts)
       for i = 1, #m.keywords do if type(m.keywords[i]) == "string" then kw[#kw + 1] = m.keywords[i] end end
       if #kw > 0 then meta.keywords = kw end
     end
+    -- The manifest's cover picture goes into the media bag and metadata as
+    -- "cover", for a web page's preview picture (og:image) once mdz-images.lua
+    -- publishes it. (Not cover-image: Pandoc's EPUB writer reads that from
+    -- disk, where this picture isn't.)
+    if meta.cover == nil and type(m.cover) == "string" then
+      local cover = m.cover:gsub("^%./", "", 1)
+      local name = cover ~= "" and archive:find(cover) or nil
+      local bytes = name and archive:read(name)
+      if bytes then
+        if not loaded[name] then pandoc.mediabag.insert(name, mime_of(name), bytes); loaded[name] = true end
+        meta.cover = name
+      else
+        warn("manifest cover names a file that is not in the archive; ignored: " .. m.cover)
+      end
+    end
     doc.meta = meta
   end
   return doc

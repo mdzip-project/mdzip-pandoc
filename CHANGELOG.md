@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.0] - 2026-11-12
+
+- Reading: the manifest's `cover` picture goes into the media bag and the
+  `cover` metadata field. A `cover` that names no file in the archive is
+  ignored with a warning (spec 6.2).
+- `mdz-images.lua` publishes the cover to `images/<hash>.<ext>` like the
+  other pictures and, when the page has a `page-url` (or `site-url`), sets
+  `cover-url` to its full address, for an `og:image` tag in the template.
+
 ## [0.4.0] - 2026-11-12
 
 - `mdz-images.lua`, a Pandoc filter: in HTML output, each picture from the

@@ -17,6 +17,11 @@ change where (the GitHub Action sets both when it converts a folder):
 
   MDZ_IMAGES_DIR  the folder to write pictures to (default: "images" next to the output file)
   MDZ_IMAGES_URL  how the page refers to that folder (default: "images/")
+
+The cover picture (cover, which mdz.lua takes from the manifest) is published
+the same way. When the page has an address (page-url, or site-url for a page
+without one), cover-url is set to the picture's full address, for a
+template's <meta property="og:image">.
 ]]
 
 local function dirname(path)
@@ -81,6 +86,23 @@ local function rewrite_html(html)
   end))
 end
 
+-- Resolve an address relative to the page (images/x.png, ../images/x.png)
+-- against the page's full address.
+local function absolute(rel, base)
+  base = base:gsub("[^/]*$", "")
+  while rel:sub(1, 3) == "../" do
+    rel = rel:sub(4)
+    base = base:gsub("[^/]*/$", "")
+  end
+  return base .. rel
+end
+
+local function meta_string(value)
+  if value == nil then return nil end
+  local s = pandoc.utils.stringify(value)
+  return s ~= "" and s or nil
+end
+
 local function html_output()
   return FORMAT:match("html") ~= nil
 end
@@ -93,6 +115,15 @@ return {
       if not dir then
         io.stderr:write("[mdz-images] no output file, so pictures stay as they are\n")
         return nil
+      end
+      local cover = meta_string(doc.meta.cover)
+      local cover_target = cover and publish(cover)
+      if cover_target then
+        doc.meta.cover = cover_target
+        local base = meta_string(doc.meta["page-url"]) or meta_string(doc.meta["site-url"])
+        if base and not cover_target:find("^%a[%w+.-]*:") then
+          doc.meta["cover-url"] = absolute(cover_target, base)
+        end
       end
       return doc:walk({
         Image = function(img)

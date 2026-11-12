@@ -25,7 +25,7 @@ Tested with Pandoc 3.13 (Lua 5.4).
 - Pandoc converts the archive's **entry point**, the main document the archive names (or `index.md`). Links to the archive's other documents stay links.
 - In a **project-mode** archive, a collection of separate documents, only the entry point is converted, with a warning naming how many documents were left out. To convert another one, unpack it first or use the MDZip tools.
 - **Images** are read from inside the archive, never from the web or from files next to the archive, and go into Pandoc's media bag. So Word, EPUB and PDF output include them, and HTML does with `--embed-resources` (or `--extract-media`). This covers Markdown images and `<img>` tags in raw HTML, including ones in a document in a subfolder.
-- The archive's **manifest** fills in metadata the document doesn't set itself: `title`, `author`, `lang`, `description` and `keywords`.
+- The archive's **manifest** fills in metadata the document doesn't set itself: `title`, `author`, `lang`, `description`, `keywords` and `cover`. `cover` is the path of the manifest's cover picture in the media bag; in HTML, `mdz-images.lua` turns it into a link preview picture (see below).
 - A damaged or invalid archive stops Pandoc with the MDZip error code, for example `ERR_ENTRYPOINT_MISSING` or `ERR_ZIP_INVALID`.
 
 The Markdown is read as Pandoc's Markdown by default, which understands the most syntax. Add a switch to the format to change it:
@@ -89,6 +89,15 @@ The `output` output is the path written. One of `input` and `output` must be an 
 In HTML output, links between `.mdz` files become links between the pages made from them: `guide.mdz#install` becomes `guide.html#install`. The action does this with [`mdz-links.lua`](mdz-links.lua), a Pandoc filter you can also use on its own (`--lua-filter mdz-links.lua`). Links in raw HTML (`<a href="...">`) aren't changed.
 
 Pictures in HTML output are files, not built into the page: [`mdz-images.lua`](mdz-images.lua), another filter, writes each picture from the archive to `images/<hash>.<ext>` and points the page at it. A picture used on several pages is stored once, and browsers download it once. It covers Markdown images and the `<img align="...">` tags MDZip Studio writes, which Pandoc's own `--extract-media` leaves pointing at the old place. It marks the tags `data-external="1"`, so `--embed-resources` still builds the style sheet into each page but leaves the pictures as files. On its own: `pandoc -f mdz.lua --lua-filter mdz-images.lua guide.mdz -s -o site/guide.html` writes `site/images/`.
+
+The manifest's `cover` picture is published the same way, and the template gets two variables: `cover` (the picture's address from the page) and, when the page has a `page-url` (or `site-url`), `cover-url`, its full address. Link previews on social sites and chat apps need the full address, and most don't show SVG, so make the cover a PNG or JPEG, about 1200 × 630 pixels:
+
+```html
+$if(cover-url)$
+  <meta property="og:image" content="$cover-url$">
+  <meta name="twitter:card" content="summary_large_image">
+$endif$
+```
 
 Pandoc is installed with the official [`pandoc/actions/setup`](https://github.com/pandoc/actions), whose Linux install is x64 only; on a runner it doesn't support, install Pandoc in an earlier step. To check archives before converting them, add [setup-mdz](https://github.com/mdzip-project/setup-mdz) and run `mdz validate`.
 

@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased] - 0.1.0
+## [0.1.0] - 2026-11-12
 
 First version: `mdz.lua`, a Pandoc 3 custom reader and writer on mdzip-core-lua.
 

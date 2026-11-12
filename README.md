@@ -50,7 +50,7 @@ The result passes `mdz validate`.
 
 ## GitHub Action
 
-The repository is also a GitHub Action that converts one file in a workflow. It installs Pandoc (unless the runner already has it), downloads mdzip-core-lua and runs `mdz.lua`. For example, to turn an `.mdz` into a web page:
+The repository is also a GitHub Action. It installs Pandoc (unless the runner already has it), downloads mdzip-core-lua and runs `mdz.lua`, on one file or a whole folder. For example, to turn an `.mdz` into a web page:
 
 ```yaml
 - uses: actions/checkout@v5
@@ -61,15 +61,32 @@ The repository is also a GitHub Action that converts one file in a workflow. It 
     args: --standalone --embed-resources
 ```
 
+Or a folder of `.mdz` pages into a website, each page put into your own [Pandoc template](https://pandoc.org/MANUAL.html#templates):
+
+```yaml
+- uses: mdzip-project/mdzip-pandoc@v0
+  with:
+    input: pages
+    output: _site
+    args: --standalone --embed-resources --template=site/template.html --css=site/style.css
+```
+
+[mdzip-pages-example](https://github.com/mdzip-project/mdzip-pages-example) is a whole site built this way and published on GitHub Pages.
+
 | Input | Default | What it does |
 |---|---|---|
-| `input` | | The file to convert. An `.mdz` is read with `mdz.lua`; any other file Pandoc reads (`.md`, `.docx`, ...) can be packaged as an `.mdz`. |
-| `output` | | The file to write. Its extension picks the format: `.html`, `.docx`, `.epub`, `.pdf` (needs a PDF engine on the runner), or `.mdz`. Missing folders are created. |
-| `args` | | Extra Pandoc options, such as `--standalone --embed-resources` for one self-contained HTML file, `--toc`, or `--extract-media=site/media` to keep images as separate files. |
+| `input` | | The file to convert. An `.mdz` is read with `mdz.lua`; any other file Pandoc reads (`.md`, `.docx`, ...) can be packaged as an `.mdz`. Or a folder: every `.mdz` in it and its subfolders is converted. |
+| `output` | | The file to write. Its extension picks the format: `.html`, `.docx`, `.epub`, `.pdf` (needs a PDF engine on the runner), or `.mdz`. When `input` is a folder, the folder to write to, with the same subfolders. Missing folders are created. |
+| `extension` | `html` | When `input` is a folder, the format to convert each `.mdz` to, as a file extension (`html`, `docx`, `epub`, ...). |
+| `args` | | Extra Pandoc options, such as `--standalone --embed-resources` for self-contained HTML pages, `--template`, `--css` or `--toc`. They're split on spaces, so a value can't contain one. |
 | `pandoc-version` | | Pandoc to install, 3.0 or later. Empty uses the runner's Pandoc if it has one, otherwise installs 3.13, the version this is tested with. |
 | `core-lua-version` | `v0.1.0` | The mdzip-core-lua release to use. |
 
-The `output` output is the path written. One of `input` and `output` must be an `.mdz`. Pandoc is installed with the official [`pandoc/actions/setup`](https://github.com/pandoc/actions), whose Linux install is x64 only; on a runner it doesn't support, install Pandoc in an earlier step. To check an archive before converting it, add [setup-mdz](https://github.com/mdzip-project/setup-mdz) and run `mdz validate`.
+The `output` output is the path written. One of `input` and `output` must be an `.mdz`.
+
+In HTML output, links between `.mdz` files become links between the pages made from them: `guide.mdz#install` becomes `guide.html#install`. The action does this with [`mdz-links.lua`](mdz-links.lua), a Pandoc filter you can also use on its own (`--lua-filter mdz-links.lua`). Links in raw HTML (`<a href="...">`) aren't changed.
+
+Pandoc is installed with the official [`pandoc/actions/setup`](https://github.com/pandoc/actions), whose Linux install is x64 only; on a runner it doesn't support, install Pandoc in an earlier step. To check archives before converting them, add [setup-mdz](https://github.com/mdzip-project/setup-mdz) and run `mdz validate`.
 
 ## Development
 

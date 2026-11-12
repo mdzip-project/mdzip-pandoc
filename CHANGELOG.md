@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.0] - 2026-11-12
+
+- GitHub Action: `input` can be a folder. Every `.mdz` in it and its
+  subfolders is converted into `output`, keeping the subfolders, to the
+  format named by the new `extension` input (`html` by default).
+- `mdz-links.lua`, a Pandoc filter: in HTML output, links to other `.mdz`
+  files point to the pages made from them (`guide.mdz#install` becomes
+  `guide.html#install`). The action applies it whenever it reads an `.mdz`.
+
 ## [0.1.0] - 2026-11-12
 
 First version: `mdz.lua`, a Pandoc 3 custom reader and writer on mdzip-core-lua.

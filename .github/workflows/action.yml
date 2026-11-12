@@ -55,6 +55,69 @@ jobs:
           grep -q 'data:image/png;base64' out/site/note.html
           echo "OK"
 
+      - name: Make a second page that links to the first
+        shell: bash
+        run: |
+          mkdir -p work/site-src/docs
+          cp out/note.mdz work/site-src/note.mdz
+          printf '# Home
+
+See [the note](note.mdz) and [setup](docs/setup.mdz#install).
+' > work/home.md
+          printf '# Setup
+
+## Install
+
+Back [home](../index.mdz).
+' > work/setup.md
+
+      - name: Package them
+        uses: ./
+        with:
+          input: work/home.md
+          output: work/site-src/index.mdz
+
+      - name: Package the page in a subfolder
+        uses: ./
+        with:
+          input: work/setup.md
+          output: work/site-src/docs/setup.mdz
+
+      - name: Convert a folder
+        id: folder
+        uses: ./
+        with:
+          input: work/site-src
+          output: out/web
+          args: --standalone --embed-resources
+
+      - name: Check the folder
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ steps.folder.outputs.output }}" = out/web
+          ls -R out/web
+          test -f out/web/note.html
+          test -f out/web/docs/setup.html
+          grep -q 'href="note.html"' out/web/index.html
+          grep -q 'href="docs/setup.html#install"' out/web/index.html
+          grep -q 'href="../index.html"' out/web/docs/setup.html
+          grep -q 'data:image/png;base64' out/web/note.html
+          echo "OK"
+
+      - name: Convert a folder to Word
+        uses: ./
+        with:
+          input: work/site-src
+          output: out/word
+          extension: docx
+
+      - name: Check Word output keeps .mdz links
+        shell: bash
+        run: |
+          test -f out/word/docs/setup.docx
+          unzip -p out/word/index.docx word/_rels/document.xml.rels | grep -q 'note.mdz'
+
       - name: Second run reuses Pandoc and mdzip-core-lua
         uses: ./
         with:
@@ -80,7 +143,15 @@ jobs:
         with:
           input: nope.mdz
           output: nope.html
-      - name: Both should have failed
+      - name: Folder with no .mdz
+        id: empty
+        continue-on-error: true
+        uses: ./
+        with:
+          input: .github
+          output: out
+      - name: All should have failed
         run: |
+          test "${{ steps.empty.outcome }}" = failure
           test "${{ steps.neither.outcome }}" = failure
           test "${{ steps.missing.outcome }}" = failure

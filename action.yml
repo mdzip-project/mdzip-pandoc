@@ -7,13 +7,21 @@ branding:
 
 inputs:
   input:
-    description: The file to convert, such as docs/guide.mdz (or a .md/.docx to package as .mdz).
+    description: >
+      The file to convert, such as docs/guide.mdz (or a .md/.docx to package
+      as .mdz). Or a folder: every .mdz in it, and in its subfolders, is
+      converted.
     required: true
   output:
     description: >
       The file to write. Its extension picks the format (.html, .docx, .epub,
-      .pdf, ... or .mdz); missing folders are created.
+      .pdf, ... or .mdz); missing folders are created. When input is a folder,
+      the folder to write to, keeping the subfolders.
     required: true
+  extension:
+    description: When input is a folder, the format each .mdz is converted to, as a file extension.
+    required: false
+    default: html
   args:
     description: >
       Extra Pandoc options, such as "--standalone --embed-resources" for one
@@ -31,7 +39,7 @@ inputs:
 
 outputs:
   output:
-    description: The path of the file that was written.
+    description: The path of the file (or folder) that was written.
     value: ${{ steps.convert.outputs.output }}
 
 runs:
@@ -81,22 +89,46 @@ runs:
       env:
         INPUT: ${{ inputs.input }}
         OUTPUT: ${{ inputs.output }}
+        EXTENSION: ${{ inputs.extension }}
         ARGS: ${{ inputs.args }}
       run: |
         set -euo pipefail
-        lua="$GITHUB_ACTION_PATH/mdz.lua"
-        [ "$RUNNER_OS" = Windows ] && lua=$(cygpath -w "$lua")
-        [ -f "$INPUT" ] || { echo "::error title=mdzip-pandoc::input '$INPUT' not found"; exit 1; }
-        mkdir -p "$(dirname "$OUTPUT")"
-        # Read with mdz.lua when the input is an .mdz, write with it when the output is.
         # Plain sh only: macOS runners have bash 3.2 (no ${x,,}, empty arrays trip set -u).
+        fail() { echo "::error title=mdzip-pandoc::$1"; exit 1; }
+        native() { if [ "$RUNNER_OS" = Windows ]; then cygpath -w "$1"; else printf %s "$1"; fi; }
         lower() { printf %s "$1" | tr '[:upper:]' '[:lower:]'; }
-        set --
-        case "$(lower "$INPUT")" in *.mdz) set -- "$@" -f "$lua" ;; esac
-        case "$(lower "$OUTPUT")" in *.mdz) set -- "$@" -t "$lua" ;; esac
-        [ $# -gt 0 ] || { echo "::error title=mdzip-pandoc::input or output must be an .mdz file"; exit 1; }
-        # ARGS is split on spaces on purpose: it holds several options.
-        # shellcheck disable=SC2086
-        pandoc "$@" "$INPUT" -o "$OUTPUT" $ARGS
+        lua=$(native "$GITHUB_ACTION_PATH/mdz.lua")
+        links=$(native "$GITHUB_ACTION_PATH/mdz-links.lua")
+
+        # Read with mdz.lua when the input is an .mdz (and turn links to other
+        # .mdz files into links to their pages), write with it when the output is.
+        convert() {
+          local in=$1 out=$2
+          set --
+          case "$(lower "$in")" in *.mdz) set -- "$@" -f "$lua" --lua-filter "$links" ;; esac
+          case "$(lower "$out")" in *.mdz) set -- "$@" -t "$lua" ;; esac
+          [ $# -gt 0 ] || fail "input or output must be an .mdz file"
+          mkdir -p "$(dirname "$out")"
+          # ARGS is split on spaces on purpose: it holds several options.
+          # shellcheck disable=SC2086
+          pandoc "$@" "$in" -o "$out" $ARGS
+          echo "Wrote $out"
+        }
+
+        if [ -d "$INPUT" ]; then
+          input=${INPUT%/}; output=${OUTPUT%/}; ext=${EXTENSION#.}
+          [ ! -e "$output" ] || [ -d "$output" ] || fail "input is a folder, so output '$OUTPUT' must be a folder too"
+          [ "$(lower "$ext")" != mdz ] || fail "extension can't be mdz: the input files already are"
+          count=0
+          while IFS= read -r file; do
+            rel=${file#"$input"/}
+            convert "$file" "$output/${rel%.*}.$ext"
+            count=$((count + 1))
+          done < <(find "$input" -type f \( -name '*.mdz' -o -name '*.MDZ' \) | sort)
+          [ "$count" -gt 0 ] || fail "no .mdz files in '$INPUT'"
+          [ "$count" -eq 1 ] && echo "Converted 1 file" || echo "Converted $count files"
+        else
+          [ -f "$INPUT" ] || fail "input '$INPUT' not found"
+          convert "$INPUT" "$OUTPUT"
+        fi
         echo "output=$OUTPUT" >> "$GITHUB_OUTPUT"
-        echo "Wrote $OUTPUT"

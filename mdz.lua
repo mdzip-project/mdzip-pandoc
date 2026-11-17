@@ -14,12 +14,16 @@ Switches (add to the format, as in -f mdz.lua+gfm):
   commonmark     read or write CommonMark with Pandoc's extensions (commonmark_x)
   pandoc         write Pandoc's Markdown (reading uses it by default)
   raw_html       keep raw HTML from the archive (on by default; -raw_html drops it)
+  combine        read the entry point and the documents it links to, as one
+                 document (document-mode archives)
+  orphans        with combine, add the documents nothing links to as well
+  pagebreaks     with combine, start each document on a new page
 
 Needs mdzip-core-lua (https://github.com/mdzip-project/mdzip-core-lua): set
 MDZIP_LUA_PATH to its src folder, or keep it next to this file.
 ]]
 
-local VERSION = "0.1.0"
+local VERSION = "0.6.0"
 local URL = "https://github.com/mdzip-project/mdzip-pandoc"
 
 Extensions = {
@@ -27,6 +31,9 @@ Extensions = {
   commonmark = false,
   pandoc = false,
   raw_html = true,
+  combine = false,
+  orphans = false,
+  pagebreaks = false,
 }
 
 ---------------------------------------------------------------------------
@@ -89,6 +96,109 @@ local function reader_format(opts)
   return fmt
 end
 
+-- +combine: the entry point and the documents it links to, as one document
+-- (spec 5.7.2 allows a single output from them). Documents come in the order
+-- links to them first appear, depth-first from the entry point, each once.
+-- Each is wrapped in a Div whose id comes from its path (docs/setup.md ->
+-- docs-setup); identifiers in documents other than the entry point get that
+-- prefix (docs-setup--install), and links between documents become links
+-- inside the result. +orphans adds documents nothing links to, by path;
+-- +pagebreaks starts each document after the first on a new page.
+
+local PAGEBREAK = {
+  { "openxml", '<w:p><w:r><w:br w:type="page"/></w:r></w:p>' },
+  { "latex", "\\newpage{}" },
+  { "html", '<div style="break-after: page"></div>' },
+}
+
+local function each_identifier(fn)
+  local function f(el)
+    if el.identifier and el.identifier ~= "" then return fn(el) end
+  end
+  return { Header = f, Div = f, Span = f, CodeBlock = f, Code = f, Link = f, Image = f, Table = f, Figure = f }
+end
+
+local function combine_documents(archive, entry, read_doc, ext)
+  local is_doc = {}
+  for _, d in ipairs(archive:documents()) do is_doc[d] = true end
+
+  local order, parsed = {}, {}
+  local function visit(path)
+    if parsed[path] then return end
+    parsed[path] = read_doc(path)
+    order[#order + 1] = path
+    local targets = {}
+    parsed[path]:walk({
+      Link = function(l)
+        local r = archive:resolve_link(path, l.target)
+        if r.kind == "internal" and is_doc[r.entry] then targets[#targets + 1] = r.entry end
+      end,
+    })
+    for _, t in ipairs(targets) do visit(t) end
+  end
+  visit(entry)
+
+  local left = {}
+  for _, d in ipairs(archive:documents()) do
+    if not parsed[d] then left[#left + 1] = d end
+  end
+  table.sort(left)
+  if #left > 0 then
+    if ext:includes("orphans") then
+      for _, d in ipairs(left) do visit(d) end
+    else
+      warn(#left .. " document" .. (#left == 1 and "" or "s") .. " nothing links to left out (add +orphans to include "
+        .. (#left == 1 and "it" or "them") .. "): " .. table.concat(left, ", "))
+    end
+  end
+
+  -- Prefixes, kept clear of the entry point's own identifiers.
+  local used, prefix = {}, {}
+  parsed[entry]:walk(each_identifier(function(el) used[el.identifier] = true end))
+  for _, path in ipairs(order) do
+    -- Letters (any script), digits, _ and . stay; everything else becomes -.
+    local chars = {}
+    for _, c in utf8.codes((path:gsub("%.[^./]+$", ""))) do
+      local ch = utf8.char(c)
+      chars[#chars + 1] = (c >= 128 or ch:match("[%w_.]")) and ch or "-"
+    end
+    local p = pandoc.text.lower(table.concat(chars)):gsub("%-%-+", "-"):gsub("^%-+", ""):gsub("%-+$", "")
+    if p == "" then p = "document" end
+    local base, n = p, 2
+    while used[p] do p = base .. "-" .. n; n = n + 1 end
+    used[p] = true
+    prefix[path] = p
+  end
+
+  local function anchor(target, fragment)
+    if fragment == nil or fragment == "" then return "#" .. prefix[target] end
+    if target == entry then return "#" .. fragment end
+    return "#" .. prefix[target] .. "--" .. fragment
+  end
+
+  local blocks = pandoc.Blocks({})
+  for i, path in ipairs(order) do
+    local d = parsed[path]:walk({
+      Link = function(l)
+        local r = archive:resolve_link(path, l.target)
+        if r.kind == "internal" and prefix[r.entry] then
+          l.target = anchor(r.entry, r.fragment)
+          return l
+        end
+      end,
+    })
+    if path ~= entry then
+      local pre = prefix[path] .. "--"
+      d = d:walk(each_identifier(function(el) el.identifier = pre .. el.identifier; return el end))
+    end
+    if i > 1 and ext:includes("pagebreaks") then
+      for _, pb in ipairs(PAGEBREAK) do blocks:insert(pandoc.RawBlock(pb[1], pb[2])) end
+    end
+    blocks:insert(pandoc.Div(d.blocks, pandoc.Attr(prefix[path], { "mdz-document" }, { path = path })))
+  end
+  return pandoc.Pandoc(blocks, parsed[entry].meta)
+end
+
 function ByteStringReader(input, opts)
   local archive, err = mdzip.open(input)
   if not archive then fail(err) end
@@ -96,21 +206,25 @@ function ByteStringReader(input, opts)
   if not entry then fail(eerr) end
   local mode, merr = archive:mode()
   if not mode then fail(merr) end
+  local ext = opts.extensions
+  local combine = ext:includes("combine")
+  local others = #archive:documents() - 1
   if mode == "project" then
-    local others = #archive:documents() - 1
     warn("this is a project-mode archive; converting only its entry point, " .. entry
-      .. (others > 0 and (" (" .. others .. " other document" .. (others == 1 and "" or "s") .. " left out)") or ""))
+      .. (others > 0 and (" (" .. others .. " other document" .. (others == 1 and "" or "s") .. " left out)") or "")
+      .. (combine and "; +combine applies only to document-mode archives" or ""))
+    combine = false
+  elseif others > 0 and not combine then
+    warn("converting only the entry point, " .. entry .. ", of " .. (others + 1)
+      .. " documents; add +combine to include the ones it links to")
   end
-  local text, terr = archive:read_text(entry)
-  if not text then fail(terr) end
+  local fmt = reader_format(opts)
 
-  local doc = pandoc.read(text, reader_format(opts), opts)
-
-  -- Images: resolve against the entry point, load from the archive into the
-  -- media bag under their archive path, and point the document at it.
+  -- Images: resolve against the document they're in, load from the archive
+  -- into the media bag under their archive path, and point the document at it.
   local loaded = {}
-  local function load(src)
-    local r = archive:resolve_link(entry, src)
+  local function load(from, src)
+    local r = archive:resolve_link(from, src)
     if r.kind ~= "internal" then
       if r.kind == "unresolved" then warn("image not in the archive: " .. src) end
       return nil
@@ -123,18 +237,30 @@ function ByteStringReader(input, opts)
     end
     return r.entry
   end
-  doc = doc:walk({
-    Image = function(img)
-      local path = load(img.src)
-      if path then img.src = path; return img end
-    end,
-    RawInline = function(raw)
-      if raw.format == "html" then raw.text = rewrite_html_img(raw.text, load); return raw end
-    end,
-    RawBlock = function(raw)
-      if raw.format == "html" then raw.text = rewrite_html_img(raw.text, load); return raw end
-    end,
-  })
+  local function read_doc(path)
+    local text, terr = archive:read_text(path)
+    if not text then fail(terr) end
+    local function here(src) return load(path, src) end
+    return pandoc.read(text, fmt, opts):walk({
+      Image = function(img)
+        local found = here(img.src)
+        if found then img.src = found; return img end
+      end,
+      RawInline = function(raw)
+        if raw.format == "html" then raw.text = rewrite_html_img(raw.text, here); return raw end
+      end,
+      RawBlock = function(raw)
+        if raw.format == "html" then raw.text = rewrite_html_img(raw.text, here); return raw end
+      end,
+    })
+  end
+
+  local doc
+  if combine then
+    doc = combine_documents(archive, entry, read_doc, ext)
+  else
+    doc = read_doc(entry)
+  end
 
   -- Manifest metadata fills in what the document doesn't say itself.
   local m = archive:manifest()
@@ -164,6 +290,22 @@ function ByteStringReader(input, opts)
         meta.cover = name
       else
         warn("manifest cover names a file that is not in the archive; ignored: " .. m.cover)
+      end
+    end
+    -- Export hints for Pandoc (an mdzip-pandoc field, not part of the spec):
+    -- "pandoc": { "referenceDoc": "styles/reference.docx" }. The reference
+    -- document goes into the media bag, and docx.lua passes it to Pandoc's
+    -- Word writer; a reader can't set writer options itself.
+    if type(m.pandoc) == "table" and type(m.pandoc.referenceDoc) == "string" then
+      local ref = m.pandoc.referenceDoc:gsub("^%./", "", 1)
+      local name = ref ~= "" and archive:find(ref) or nil
+      local bytes = name and archive:read(name)
+      if bytes and name:lower():match("%.do[ct]x$") then
+        pandoc.mediabag.insert(name, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", bytes)
+        meta["mdz-reference-doc"] = name
+      else
+        warn("manifest pandoc.referenceDoc must name a .docx or .dotx file in the archive; ignored: "
+          .. m.pandoc.referenceDoc)
       end
     end
     doc.meta = meta

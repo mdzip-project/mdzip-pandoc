@@ -170,6 +170,153 @@ pandoc.system.with_temporary_directory("mdz-lua-tests", function(tmp)
     eq(read_file(t("site/images/" .. name)), PNG)
   end)
 
+  -- A document split over several files: the entry point links to b first,
+  -- then a; b links to c; d is linked from nowhere. Every file has a
+  -- "notes" heading, and a's and c's images are relative to a subfolder.
+  local book = assert(mdzip.create({
+    files = {
+      { path = "index.md", text = "# Book\n\n## Notes\n\n[B](part-b.md), [A's notes](ch/part-a.md#notes), [here](#notes).\n" },
+      { path = "ch/part-a.md", text = "# Part A\n\n## Notes\n\n![Pixel](../images/pixel.png)\n\n[Back](../index.md) [self](#notes)\n" },
+      { path = "part-b.md", text = "# Part B\n\n## Notes\n\nOn to [C](ch/part-c.md).\n" },
+      { path = "ch/part-c.md", text = "# Part C\n\n<img src=\"../images/pixel.png\" alt=\"Pixel\">\n" },
+      { path = "part-d.md", text = "# Part D\n\nNobody links here.\n" },
+      { path = "images/pixel.png", data = PNG },
+    },
+    title = "Book",
+  }))
+  write_file(t("book.mdz"), book)
+
+  check("read: without +combine, says how to include the other documents", function()
+    local out = pandoc_ok("-f mdz.lua " .. q(t("book.mdz")) .. " -t html")
+    has(out, "add +combine")
+    lacks(out, "Part B")
+  end)
+
+  check("read: +combine follows links depth-first and leaves out orphans", function()
+    local out = pandoc_ok("-f mdz.lua+combine " .. q(t("book.mdz")) .. " -t html")
+    local b, c, a = out:find("Part B", 1, true), out:find("Part C", 1, true), out:find("Part A", 1, true)
+    assert(b and c and a and b < c and c < a, "order index, B, C (linked from B), A:\n" .. out)
+    lacks(out, "Nobody links here")
+    has(out, "part-d.md", "warning names the orphan")
+    has(out, "add +orphans")
+  end)
+
+  check("read: +combine turns links between documents into internal links", function()
+    local out = pandoc_ok("-f mdz.lua+combine " .. q(t("book.mdz")) .. " -t html")
+    has(out, 'id="index"', "each document is wrapped")
+    has(out, 'id="ch-part-a"')
+    has(out, 'href="#part-b"', "link to a whole document")
+    has(out, 'href="#ch-part-a--notes"', "link to a heading in another document")
+    has(out, 'href="#notes"', "the entry point's own identifiers keep their names")
+    has(out, 'id="ch-part-a--notes"', "other documents' identifiers get a prefix")
+    has(out, 'href="#index"', "link back to the entry point")
+    assert(not out:find('href="[^"]*%.md[#"]'), "no links to .md files left:\n" .. out)
+  end)
+
+  check("read: +combine resolves images against each document", function()
+    local out = pandoc_ok("-f mdz.lua+combine " .. q(t("book.mdz")) .. " -t html --embed-resources -s")
+    lacks(out, "image not in the archive")
+    local _, n = out:gsub("data:image/png;base64,", "")
+    eq(n >= 2, true, "both images embedded (" .. n .. ")")
+  end)
+
+  check("read: +orphans adds documents nothing links to, at the end", function()
+    local out = pandoc_ok("-f mdz.lua+combine+orphans " .. q(t("book.mdz")) .. " -t html")
+    local a, d = out:find("Part A", 1, true), out:find("Nobody links here", 1, true)
+    assert(a and d and a < d, "orphan last:\n" .. out)
+    lacks(out, "add +orphans")
+  end)
+
+  check("read: +pagebreaks puts page breaks between documents in Word", function()
+    pandoc_ok("-f mdz.lua+combine+pagebreaks " .. q(t("book.mdz")) .. " -o " .. q(t("book.docx")))
+    local bytes, xml = read_file(t("book.docx")), nil
+    for _, e in ipairs(zip.read(bytes)) do
+      if e.name == "word/document.xml" then xml = zip.extract(bytes, e) end
+    end
+    assert(xml, "document.xml")
+    local _, n = xml:gsub('w:type="page"', "")
+    eq(n, 3, "breaks before the 2nd, 3rd and 4th documents")
+    local plain = pandoc_ok("-f mdz.lua+combine " .. q(t("book.mdz")) .. " -t html")
+    lacks(plain, "break-after", "no breaks without +pagebreaks")
+  end)
+
+  check("read: +combine leaves project-mode archives alone", function()
+    write_file(t("project.mdz"), assert(mdzip.create({
+      files = {
+        { path = "index.md", text = "# Home\n\n[Other](other.md)\n" },
+        { path = "other.md", text = "# Other\n" },
+      },
+      mode = "project",
+    })))
+    local out = pandoc_ok("-f mdz.lua+combine " .. q(t("project.mdz")) .. " -t html")
+    has(out, "applies only to document-mode")
+    lacks(out, "<h1 id=\"other\"")
+  end)
+
+  -- A reference document with a marker in its styles, inside an archive.
+  local function word_part(path, part)
+    local bytes = read_file(path)
+    for _, e in ipairs(zip.read(bytes)) do
+      if e.name == part then return zip.extract(bytes, e) end
+    end
+    return ""
+  end
+  local function styled_reference(content_type)
+    local default = pandoc.pipe(PANDOC, { "--print-default-data-file", "reference.docx" }, "")
+    local entries = {}
+    for _, e in ipairs(pandoc.zip.Archive(default).entries) do
+      local data = e:contents()
+      if e.path == "word/styles.xml" then data = data:gsub('w:val="Table" />', 'w:val="MarkerTable" />', 1) end
+      if e.path == "[Content_Types].xml" and content_type then data = data:gsub("document%.main%+xml", content_type) end
+      entries[#entries + 1] = pandoc.zip.Entry(e.path, data)
+    end
+    return pandoc.zip.Archive(entries):bytestring()
+  end
+  local TABLE = "# Styled\n\n| a | b |\n|---|---|\n| 1 | 2 |\n"
+  for _, case in ipairs({ { "styled.mdz", "styles/reference.docx" }, { "styled-dotx.mdz", "styles/house.dotx", "template.main+xml" } }) do
+    write_file(t(case[1]), assert(mdzip.create({
+      files = { { path = "index.md", text = TABLE }, { path = case[2], data = styled_reference(case[3]) } },
+      manifest = { pandoc = { referenceDoc = case[2] } },
+    })))
+  end
+
+  check("docx.lua: uses the reference document the .mdz names", function()
+    pandoc_ok("-f mdz.lua " .. q(t("styled.mdz")) .. " -t docx.lua -o " .. q(t("styled.docx")))
+    has(word_part(t("styled.docx"), "word/styles.xml"), "MarkerTable")
+    lacks(word_part(t("styled.docx"), "docProps/custom.xml"), "mdz-reference-doc", "no leftover property")
+    pandoc_ok("-f mdz.lua " .. q(t("styled.mdz")) .. " -o " .. q(t("plain.docx")))
+    lacks(word_part(t("plain.docx"), "word/styles.xml"), "MarkerTable", "Pandoc's own writer ignores it")
+  end)
+
+  check("docx.lua: a Word template (.dotx) works and gives a .docx", function()
+    pandoc_ok("-f mdz.lua " .. q(t("styled-dotx.mdz")) .. " -t docx.lua -o " .. q(t("from-dotx.docx")))
+    has(word_part(t("from-dotx.docx"), "word/styles.xml"), "MarkerTable")
+    has(word_part(t("from-dotx.docx"), "[Content_Types].xml"), "document.main+xml")
+  end)
+
+  check("docx.lua: --reference-doc on the command line wins", function()
+    local own = pandoc.pipe(PANDOC, { "--print-default-data-file", "reference.docx" }, "")
+    write_file(t("own.docx"), own)
+    pandoc_ok("-f mdz.lua " .. q(t("styled.mdz")) .. " -t docx.lua --reference-doc " .. q(t("own.docx")) .. " -o " .. q(t("own-out.docx")))
+    lacks(word_part(t("own-out.docx"), "word/styles.xml"), "MarkerTable")
+  end)
+
+  check("docx.lua: works on any input, and on an .mdz without a reference document", function()
+    pandoc_ok("-f mdz.lua " .. q(t("sample.mdz")) .. " -t docx.lua -o " .. q(t("sample-w.docx")))
+    has(zip_names(read_file(t("sample-w.docx"))), "word/media/", "images still reach Word")
+    write_file(t("plain.md"), TABLE)
+    pandoc_ok(q(t("plain.md")) .. " -t docx.lua -o " .. q(t("plain-w.docx")))
+  end)
+
+  check("read: a referenceDoc that isn't in the archive is ignored with a warning", function()
+    write_file(t("noref.mdz"), assert(mdzip.create({
+      files = { { path = "index.md", text = TABLE } },
+      manifest = { pandoc = { referenceDoc = "styles/gone.docx" } },
+    })))
+    local out = pandoc_ok("-f mdz.lua " .. q(t("noref.mdz")) .. " -t docx.lua -o " .. q(t("noref.docx")))
+    has(out, "styles/gone.docx")
+  end)
+
   check("read: -raw_html drops raw HTML (hostile-content.mdz)", function()
     local with = pandoc_ok("-f mdz.lua " .. q(FIX .. "hostile-content.mdz") .. " -t html")
     has(with, "<script", "raw HTML passes through by default, as with Pandoc's own Markdown")

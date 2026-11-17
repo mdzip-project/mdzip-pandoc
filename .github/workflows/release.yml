@@ -1,0 +1,63 @@
+name: Release download
+
+# Attaches mdzip-pandoc-<version>.zip (mdz.lua, its filters and mdzip-core-lua)
+# to a published release. The tag must match VERSION in mdz.lua (v0.6.0 for
+# "0.6.0"). Run it by hand to attach the download to an existing release.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to attach the download to, such as v0.6.0
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
+          path: mdzip-pandoc
+
+      - name: Check the version and find the pinned mdzip-core-lua
+        id: core
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^local VERSION = "\(.*\)"$/\1/p' mdzip-pandoc/mdz.lua)
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::mdz.lua says $version but the tag is $TAG"; exit 1
+          fi
+          v=$(sed -n '/core-lua-version:/,/default:/s/.*default: *//p' mdzip-pandoc/action.yml | tr -d "'\" ")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v5
+        with:
+          repository: mdzip-project/mdzip-core-lua
+          ref: ${{ steps.core.outputs.version }}
+          path: mdzip-core-lua
+
+      - uses: pandoc/actions/setup@v1
+        with:
+          version: "3.13"
+
+      - name: Test
+        working-directory: mdzip-pandoc
+        run: pandoc lua tests/run.lua
+
+      - name: Build and attach the download
+        working-directory: mdzip-pandoc
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          zip=$(pandoc lua tools/bundle.lua)
+          gh release upload "$TAG" "$zip" --clobber

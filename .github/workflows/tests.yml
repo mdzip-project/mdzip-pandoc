@@ -1,0 +1,86 @@
+name: Tests
+
+# The end-to-end tests (tests/run.lua) on Pandoc 3.13 with the mdzip-core-lua
+# release the action pins (core-lua-version in action.yml), and a check that
+# the release download works on its own.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: mdzip-pandoc
+
+      - name: Find the pinned mdzip-core-lua
+        id: core
+        shell: bash
+        run: |
+          v=$(sed -n '/core-lua-version:/,/default:/s/.*default: *//p' mdzip-pandoc/action.yml | tr -d "'\" ")
+          test -n "$v"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      # The whole repository, not the LuaRocks package: the tests use its fixtures.
+      - uses: actions/checkout@v5
+        with:
+          repository: mdzip-project/mdzip-core-lua
+          ref: ${{ steps.core.outputs.version }}
+          path: mdzip-core-lua
+
+      - uses: pandoc/actions/setup@v1
+        with:
+          version: "3.13"
+
+      - uses: mdzip-project/setup-mdz@v1
+        with:
+          version: 2.1.0
+
+      - name: Run the tests
+        working-directory: mdzip-pandoc
+        shell: bash
+        run: pandoc lua tests/run.lua
+
+      - name: Build the release download
+        id: bundle
+        working-directory: mdzip-pandoc
+        shell: bash
+        run: echo "zip=$(pandoc lua tools/bundle.lua)" >> "$GITHUB_OUTPUT"
+
+      - name: Use the download on its own
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Somewhere with no mdzip-core-lua nearby and no MDZIP_LUA_PATH.
+          dir="$RUNNER_TEMP/bundle"
+          mkdir -p "$dir"
+          unzip -q "mdzip-pandoc/${{ steps.bundle.outputs.zip }}" -d "$dir"
+          cd "$dir"
+          lua=$(ls -d mdzip-pandoc-*/mdz.lua)
+          echo 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==' | base64 -d > dot.png
+          printf '# Bundle check\n\n![A dot](dot.png)\n' > note.md
+          unset MDZIP_LUA_PATH
+          pandoc note.md -t "$lua" -o note.mdz
+          mdz validate note.mdz
+          pandoc -f "$lua" note.mdz -s --embed-resources -o note.html
+          grep -q 'Bundle check' note.html
+          grep -q 'data:image/png;base64' note.html
+          echo "OK"
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.os == 'ubuntu-latest'
+        with:
+          name: release-download
+          path: mdzip-pandoc/dist/*.zip

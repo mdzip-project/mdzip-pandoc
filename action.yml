@@ -119,6 +119,7 @@ runs:
         lua=$(native "$GITHUB_ACTION_PATH/mdz.lua")
         links=$(native "$GITHUB_ACTION_PATH/mdz-links.lua")
         images=$(native "$GITHUB_ACTION_PATH/mdz-images.lua")
+        docx=$(native "$GITHUB_ACTION_PATH/docx.lua")
 
         site=""
         [ -z "$SITE_URL" ] || site="${SITE_URL%/}/"
@@ -136,6 +137,8 @@ runs:
           case "$(lower "$in")" in *.mdz) set -- "$@" -f "$lua" --lua-filter "$links" ;; esac
           case "$(lower "$out")" in *.mdz) set -- "$@" -t "$lua" ;; esac
           [ $# -gt 0 ] || fail "input or output must be an .mdz file"
+          # Word from an .mdz: docx.lua uses the reference document the archive names.
+          case "$(lower "$in"):$(lower "$out")" in *.mdz:*.docx) set -- "$@" -t "$docx" ;; esac
           # HTML from an .mdz: pictures become files in images/, named by their contents.
           if [ "$IMAGES" = files ]; then
             case "$(lower "$in"):$(lower "$out")" in

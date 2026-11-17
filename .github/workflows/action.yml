@@ -155,6 +155,19 @@ jobs:
           test -f out/word/docs/setup.docx
           unzip -p out/word/index.docx word/_rels/document.xml.rels | grep -q 'note.mdz'
 
+      - name: Word from an .mdz uses the reference document it carries
+        uses: ./
+        with:
+          input: examples/grid-tables.mdz
+          output: out/grid.docx
+
+      - name: Check the grid lines
+        shell: bash
+        run: |
+          set -euo pipefail
+          unzip -p out/grid.docx word/styles.xml | grep -q 'w:insideV'
+          echo "OK"
+
       - name: Second run reuses Pandoc and mdzip-core-lua
         uses: ./
         with:

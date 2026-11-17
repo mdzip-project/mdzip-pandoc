@@ -9,20 +9,21 @@ pandoc notes.md -t mdz.lua -o notes.mdz             # Markdown and its images to
 pandoc report.docx -t mdz.lua -o report.mdz         # Word to .mdz, images included
 ```
 
-It's one Lua file, `mdz.lua`, used as a Pandoc [custom reader and writer](https://pandoc.org/custom-readers.html). It needs Pandoc 3 and the [mdzip-core-lua](https://github.com/mdzip-project/mdzip-core-lua) library.
+It's one Lua file, `mdz.lua`, used as a Pandoc [custom reader and writer](https://pandoc.org/custom-readers.html). It needs Pandoc 3 and the [mdzip-core-lua](https://github.com/mdzip-project/mdzip-core-lua) library, which the release download includes.
 
 ## Setup
 
-1. Put `mdz.lua` somewhere, and pass its path to `-f` or `-t` (or copy it into Pandoc's data directory under `custom/`).
-2. Make mdzip-core-lua's `src` folder findable, in one of these ways:
-   - set `MDZIP_LUA_PATH` to it, for example `MDZIP_LUA_PATH=/path/to/mdzip-core-lua/src`;
-   - put the `mdzip-core-lua` folder next to `mdz.lua`, or next to the folder `mdz.lua` is in.
+1. Download `mdzip-pandoc-<version>.zip` from the [latest release](https://github.com/mdzip-project/mdzip-pandoc/releases/latest) and unzip it. It holds `mdz.lua`, the two filters and a copy of mdzip-core-lua, so there's nothing else to install.
+2. Pass the path of `mdz.lua` to `-f` or `-t`, for example `pandoc -f mdzip-pandoc-0.6.0/mdz.lua guide.mdz -o guide.docx`. Keep the `mdzip-core-lua` folder next to `mdz.lua`.
+
+To use your own copy of mdzip-core-lua instead (a git checkout, or one installed with `luarocks install mdzip-core-lua`), set `MDZIP_LUA_PATH` to its `src` folder, or put the `mdzip-core-lua` folder next to `mdz.lua` or next to the folder `mdz.lua` is in.
 
 Tested with Pandoc 3.13 (Lua 5.4).
 
 ## Reading an `.mdz`
 
 - Pandoc converts the archive's **entry point**, the main document the archive names (or `index.md`). Links to the archive's other documents stay links.
+- A document split over **several files** (a document-mode archive whose entry point links to its chapters) is converted as just the entry point, with a warning, unless you add `+combine`: see [Several files as one document](#several-files-as-one-document).
 - In a **project-mode** archive, a collection of separate documents, only the entry point is converted, with a warning naming how many documents were left out. To convert another one, unpack it first or use the MDZip tools.
 - **Images** are read from inside the archive, never from the web or from files next to the archive, and go into Pandoc's media bag. So Word, EPUB and PDF output include them, and HTML does with `--embed-resources` (or `--extract-media`). This covers Markdown images and `<img>` tags in raw HTML, including ones in a document in a subfolder.
 - The archive's **manifest** fills in metadata the document doesn't set itself: `title`, `author`, `lang`, `description`, `keywords` and `cover`. `cover` is the path of the manifest's cover picture in the media bag; in HTML, `mdz-images.lua` turns it into a link preview picture (see below).
@@ -35,8 +36,48 @@ The Markdown is read as Pandoc's Markdown by default, which understands the most
 | `-f mdz.lua+gfm` | Read GitHub-Flavored Markdown |
 | `-f mdz.lua+commonmark` | Read CommonMark with Pandoc's extensions (`commonmark_x`) |
 | `-f mdz.lua-raw_html` | Drop raw HTML |
+| `-f mdz.lua+combine` | Read the entry point and the documents it links to as one document |
+| `-f mdz.lua+combine+orphans` | Also add the documents nothing links to |
+| `-f mdz.lua+combine+pagebreaks` | Start each document on a new page |
 
 Raw HTML in the archive passes through to HTML output, as it does with Pandoc's own Markdown reader. For an `.mdz` from someone you don't trust, use `-raw_html` or sanitize the HTML output: it can contain scripts.
+
+### Several files as one document
+
+```sh
+pandoc -f mdz.lua+combine+pagebreaks guide.mdz -o guide.docx
+```
+
+With `+combine`, the entry point and every document it links to become one document, for a single Word file, PDF or EPUB. The spec allows this for document-mode archives (section 5.7.2); a project-mode archive is a set of separate documents, so it's still converted as just its entry point.
+
+- **Order:** the entry point, then each document in the order links to it first appear, following each one's own links before going on (depth-first). An entry point with a list of chapters sets the reading order. Each document appears once, however many links lead to it.
+- **Documents nothing links to** are left out, with a warning naming them. Add `+orphans` to put them at the end, sorted by path.
+- **Links** between the documents become links inside the result: `chapters/install.md#windows` points to that heading, and works in Word too. To keep identifiers apart, each document's headings get a prefix made from its path (`chapters-install--windows`), except in the entry point, whose identifiers stay as they are. Each document is wrapped in a section whose identifier is the prefix alone (`chapters-install`), with class `mdz-document`.
+- **Images** are found relative to the document they're in.
+- **`+pagebreaks`** starts each document after the first on a new page, in Word, PDF (LaTeX) and printed HTML. In Word you can get the same from a [reference document](https://pandoc.org/MANUAL.html#option--reference-doc) whose Heading 1 style starts a new page.
+- **Metadata** comes from the entry point (and the manifest); front matter in the other documents is ignored.
+
+### Word styles carried in the `.mdz`
+
+An `.mdz` can carry its own Word [reference document](https://pandoc.org/MANUAL.html#option--reference-doc), the file Pandoc takes Word's styles from: tables, headings, fonts, page size and margins, headers and footers. Name it in the manifest:
+
+```json
+"pandoc": { "referenceDoc": "styles/reference.docx" }
+```
+
+and write Word with `docx.lua`, Pandoc's own Word writer plus that reference document:
+
+```sh
+pandoc -f mdz.lua guide.mdz -t docx.lua -o guide.docx
+```
+
+- A Word template (`.dotx`) works as well as a `.docx`. Only its styles and page setup are used, as with any reference document: its text, and any macros, are not. The result is a normal `.docx`.
+- `--reference-doc` on the command line overrides the one in the archive.
+- The `pandoc` field is mdzip-pandoc's, not part of the MDZip spec. Other MDZip apps ignore it and keep it when they save (spec 6.3), and show the reference document as just another file.
+- Pandoc's own Word writer (`-o guide.docx` without `-t docx.lua`) can't use it, because a reader can't set writer options. It also records the setting as a document property, `mdz-reference-doc`, in the Word file.
+- The GitHub Action uses `docx.lua` whenever it turns an `.mdz` into Word.
+
+[`examples/grid-tables.mdz`](examples/grid-tables.mdz) carries a reference document whose tables have grid lines and a grey header row. To make your own, start from Pandoc's (`pandoc -o reference.docx --print-default-data-file reference.docx`), change its styles in Word, and add it to the archive. [`examples/build.lua`](examples/build.lua) builds the example (`pandoc lua examples/build.lua`).
 
 ## Writing an `.mdz`
 
@@ -109,13 +150,20 @@ To try it by hand, follow the test script in [TESTING.md](TESTING.md). The autom
 PANDOC=pandoc pandoc lua tests/run.lua
 ```
 
-The tests run real `pandoc` commands with `mdz.lua` and check the results with mdzip-core-lua: reading (metadata, images into Word and HTML, raw HTML images, switches, the spec's fixture archives and their error codes), writing (images, metadata, `mdz validate`), Word to `.mdz`, and an `.mdz` to `.mdz` round trip. They expect mdzip-core-lua next to this repository (`../mdzip-core-lua`), or `MDZIP_LUA_PATH`.
+The tests run real `pandoc` commands with `mdz.lua` and check the results with mdzip-core-lua: reading (metadata, images into Word and HTML, raw HTML images, switches, the spec's fixture archives and their error codes), writing (images, metadata, `mdz validate`), Word to `.mdz`, and an `.mdz` to `.mdz` round trip. They expect a checkout of mdzip-core-lua next to this repository (`../mdzip-core-lua`), or `MDZIP_LUA_PATH`, and use its test fixtures. CI runs them on Linux, macOS and Windows with the mdzip-core-lua release the action pins (`core-lua-version` in `action.yml`).
+
+To build the release download yourself:
+
+```sh
+pandoc lua tools/bundle.lua      # writes dist/mdzip-pandoc-<version>.zip
+```
+
+Publishing a release runs the same script and attaches the ZIP. The release tag must match `VERSION` in `mdz.lua`.
 
 ## What's left to do
 
-- Bundle mdzip-core-lua into a release download, so `mdz.lua` works without a separate checkout. For now it uses a local copy.
-- CI for the Lua tests (the GitHub Action has its own test workflow).
 - Converting a document other than the entry point (an option naming it), and project-mode archives as a whole.
+- A GitHub Action input for the reader switches, so the action can use `+combine`.
 - Packaging local Markdown files the document links to, not only images.
 
 ## License

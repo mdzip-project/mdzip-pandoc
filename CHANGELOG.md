@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.0] - unreleased
+
+- Release download: `mdzip-pandoc-<version>.zip` holds `mdz.lua`, `mdz-links.lua`, `mdz-images.lua` and a copy of mdzip-core-lua, so `mdz.lua` works without a separate checkout of the core. Built by `tools/bundle.lua` and attached to each release by a workflow.
+- CI: the end-to-end tests run on Linux, macOS and Windows with Pandoc 3.13 and the pinned mdzip-core-lua, and check that the release download works on its own.
+- Reading: `+combine` reads a document split over several files as one document: the entry point, then the documents it links to, depth-first in link order. Links between them become internal links, identifiers get a per-document prefix, and images resolve against their own document. `+orphans` adds the documents nothing links to; `+pagebreaks` starts each document on a new page (Word, LaTeX, HTML). Project-mode archives aren't combined.
+- `docx.lua`, a Word writer: Pandoc's own, plus the Word reference document (`.docx` or `.dotx`) the archive names in its manifest under `"pandoc": { "referenceDoc": ... }`, an mdzip-pandoc field. The GitHub Action uses it for `.mdz` to Word. Example: `examples/grid-tables.mdz`, with grid lines in its tables.
+- Reading a document-mode archive with more than one document, without `+combine`, warns that only the entry point is converted.
+- `mdz.lua` reports its version as 0.6.0 in the manifests it writes (it said 0.1.0 since the first release).
+
 ## [0.5.0] - 2026-11-12
 
 - Reading: the manifest's `cover` picture goes into the media bag and the

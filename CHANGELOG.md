@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.6.0] - unreleased
+## [0.6.0] - 2026-11-17
 
 - Release download: `mdzip-pandoc-<version>.zip` holds `mdz.lua`, `mdz-links.lua`, `mdz-images.lua` and a copy of mdzip-core-lua, so `mdz.lua` works without a separate checkout of the core. Built by `tools/bundle.lua` and attached to each release by a workflow.
 - CI: the end-to-end tests run on Linux, macOS and Windows with Pandoc 3.13 and the pinned mdzip-core-lua, and check that the release download works on its own.

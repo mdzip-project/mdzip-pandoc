@@ -40,7 +40,7 @@ The Markdown is read as CommonMark with Pandoc's extensions (`commonmark_x`), so
 | `-f mdz.lua+combine+orphans` | Also add the documents nothing links to |
 | `-f mdz.lua+combine+pagebreaks` | Start each document on a new page |
 
-Raw HTML in the archive passes through to HTML output, as it does with Pandoc's own readers. For an `.mdz` from someone you don't trust, use `-raw_html`: it removes raw HTML, `on...` event-handler attributes (`{onclick="..."}`) and `javascript:`, `vbscript:` and `data:text/html` links, with any of the reading switches. (Pandoc's own CommonMark and GFM readers ignore `-raw_html`, so `mdz.lua` does it itself.) For HTML you publish, a sanitizer is still the safer choice.
+Raw HTML in the archive passes through to HTML output, as it does with Pandoc's own readers. For an `.mdz` from someone you don't trust, use `-raw_html`: it removes raw HTML, `on...` event-handler attributes (`{onclick="..."}`) and `javascript:`, `vbscript:` and `data:text/html` links, with any of the reading switches. (Pandoc's own CommonMark and GFM readers ignore `-raw_html`, a [known Pandoc issue](https://github.com/jgm/pandoc/issues/8305), so `mdz.lua` does it itself.) For HTML you publish, a sanitizer is still the safer choice.
 
 ### Several files as one document
 

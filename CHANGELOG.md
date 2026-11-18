@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.7.0] - unreleased
+## [0.7.0] - 2026-11-18
 
 - Reading: Markdown is read as CommonMark with Pandoc's extensions (`commonmark_x`) by default, the way MDZip editors show it, instead of Pandoc's Markdown. Compared on 52 real archives: lists and headings right after a paragraph are no longer merged into it, heading identifiers match the editors' (`#agentsmd`, not `#agents.md`), images on their own line are no longer turned into figures captioned with their alt text (visible captions in Word), and `@name` is no longer read as a citation. `+pandoc` reads Pandoc's Markdown as before.
 - Reading with `-raw_html` now removes raw HTML with every reading switch: Pandoc's CommonMark and GFM readers ignore `-raw_html`, so `-f mdz.lua+gfm-raw_html` used to keep `<script>`. It also removes `on...` event-handler attributes and `javascript:`, `vbscript:` and `data:text/html` links, and with `+pandoc` the attributes of `<div>` and `<span>` tags.

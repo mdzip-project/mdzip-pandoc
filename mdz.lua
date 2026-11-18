@@ -10,9 +10,11 @@ output (with --embed-resources) include them. Writing packages the document
 as index.md plus every image it uses, under images/.
 
 Switches (add to the format, as in -f mdz.lua+gfm):
-  gfm            read or write GitHub-Flavored Markdown
-  commonmark     read or write CommonMark with Pandoc's extensions (commonmark_x)
-  pandoc         write Pandoc's Markdown (reading uses it by default)
+  gfm            read or write GitHub-Flavored Markdown (writing uses it by default)
+  commonmark     read or write CommonMark with Pandoc's extensions, commonmark_x
+                 (reading uses it by default: it reads Markdown the way MDZip
+                 editors do)
+  pandoc         read or write Pandoc's Markdown
   raw_html       keep raw HTML from the archive (on by default; -raw_html drops it)
   combine        read the entry point and the documents it links to, as one
                  document (document-mode archives)
@@ -23,7 +25,7 @@ Needs mdzip-core-lua (https://github.com/mdzip-project/mdzip-core-lua): set
 MDZIP_LUA_PATH to its src folder, or keep it next to this file.
 ]]
 
-local VERSION = "0.6.0"
+local VERSION = "0.7.0"
 local URL = "https://github.com/mdzip-project/mdzip-pandoc"
 
 Extensions = {
@@ -87,14 +89,51 @@ end
 ---------------------------------------------------------------------------
 -- Reading
 
+-- commonmark_x by default: CommonMark, as MDZip editors render it (a list or
+-- heading right after a paragraph, editor-style heading identifiers, no figure
+-- captions made from alt text), plus most of Pandoc's extensions.
 local function reader_format(opts)
   local ext = opts.extensions
-  local fmt = "markdown"
+  local fmt = "commonmark_x"
   if ext:includes("gfm") then fmt = "gfm"
-  elseif ext:includes("commonmark") then fmt = "commonmark_x" end
-  if not ext:includes("raw_html") then fmt = fmt .. "-raw_html" end
+  elseif ext:includes("pandoc") then fmt = "markdown" end
+  if not ext:includes("raw_html") then
+    fmt = fmt .. "-raw_html"
+    -- Pandoc's Markdown turns <div> and <span> tags into Divs and Spans with
+    -- their attributes (onclick and all); with -raw_html they're dropped too.
+    if fmt:match("^markdown") then fmt = fmt .. "-native_divs-native_spans" end
+  end
   return fmt
 end
+
+-- -raw_html, for an .mdz from someone you don't trust. Pandoc's CommonMark and
+-- GFM readers ignore -raw_html and keep raw HTML anyway, and attributes in
+-- {...} can carry event handlers, so the reader removes them itself: raw HTML,
+-- on* attributes, and javascript:/vbscript:/data:text/html link targets.
+local function unsafe_url(url)
+  local u = url:gsub("[%s%c]", ""):lower()
+  return u:match("^javascript:") or u:match("^vbscript:") or u:match("^data:text/html")
+end
+local function clean_attr(el)
+  if el.attr then
+    local attrs, changed = {}, false
+    for k, v in pairs(el.attr.attributes) do
+      if k:lower():match("^on") then changed = true else attrs[k] = v end
+    end
+    if changed then el.attr.attributes = attrs; return el end
+  end
+end
+local strip_raw_html = {
+  RawBlock = function(raw) if raw.format:match("^html") then return {} end end,
+  RawInline = function(raw) if raw.format:match("^html") then return {} end end,
+  Link = function(link)
+    if unsafe_url(link.target) then return link.content end
+    return clean_attr(link)
+  end,
+  Image = function(img) if unsafe_url(img.src) then return {} end return clean_attr(img) end,
+  Div = clean_attr, Span = clean_attr, Header = clean_attr, Code = clean_attr,
+  CodeBlock = clean_attr, Table = clean_attr, Figure = clean_attr,
+}
 
 -- +combine: the entry point and the documents it links to, as one document
 -- (spec 5.7.2 allows a single output from them). Documents come in the order
@@ -241,7 +280,9 @@ function ByteStringReader(input, opts)
     local text, terr = archive:read_text(path)
     if not text then fail(terr) end
     local function here(src) return load(path, src) end
-    return pandoc.read(text, fmt, opts):walk({
+    local parsed = pandoc.read(text, fmt, opts)
+    if not opts.extensions:includes("raw_html") then parsed = parsed:walk(strip_raw_html) end
+    return parsed:walk({
       Image = function(img)
         local found = here(img.src)
         if found then img.src = found; return img end

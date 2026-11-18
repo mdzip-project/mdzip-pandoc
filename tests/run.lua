@@ -319,9 +319,45 @@ pandoc.system.with_temporary_directory("mdz-lua-tests", function(tmp)
 
   check("read: -raw_html drops raw HTML (hostile-content.mdz)", function()
     local with = pandoc_ok("-f mdz.lua " .. q(FIX .. "hostile-content.mdz") .. " -t html")
-    has(with, "<script", "raw HTML passes through by default, as with Pandoc's own Markdown")
-    local without = pandoc_ok("-f mdz.lua-raw_html " .. q(FIX .. "hostile-content.mdz") .. " -t html")
-    lacks(without, "<script")
+    has(with, "<script", "raw HTML passes through by default, as with Pandoc's own readers")
+    -- Pandoc's CommonMark and GFM readers ignore -raw_html; mdz.lua removes it itself.
+    for _, fmt in ipairs({ "mdz.lua-raw_html", "mdz.lua+gfm-raw_html", "mdz.lua+pandoc-raw_html" }) do
+      local without = pandoc_ok("-f " .. fmt .. " " .. q(FIX .. "hostile-content.mdz") .. " -t html")
+      lacks(without, "<script", fmt)
+      lacks(without, "<svg", fmt)
+      assert(not without:find("onerror=\"", 1, true) and not without:find("onload=\"", 1, true), fmt .. ": event handler kept")
+      assert(not without:find('href="javascript:', 1, true), fmt .. ": javascript: link kept")
+    end
+  end)
+
+  check("read: -raw_html also drops event-handler attributes and script links", function()
+    write_file(t("attrs.mdz"), assert(mdzip.create({ files = { { path = "index.md", text =
+      '# Hi {#hi onclick="x()"}\n\n[a](javascript:alert(1)) [b]( JavaScript:alert(2)) [ok](https://example.com)\n\n'
+      .. '[span]{onmouseover="y()"} <span onclick="z()">tag</span>\n' } } })))
+    for _, fmt in ipairs({ "mdz.lua-raw_html", "mdz.lua+pandoc-raw_html" }) do
+      local out = pandoc_ok("-f " .. fmt .. " " .. q(t("attrs.mdz")) .. " -t html")
+      assert(not out:lower():find("on%a+=\""), fmt .. ": event handler kept\n" .. out)
+      assert(not out:lower():find("javascript:", 1, true), fmt .. ": javascript: link kept\n" .. out)
+      has(out, 'id="hi"', fmt .. ": other attributes stay")
+      has(out, 'href="https://example.com"', fmt .. ": ordinary links stay")
+      has(out, "tag", fmt .. ": text inside dropped tags stays")
+    end
+  end)
+
+  check("read: Markdown is read as CommonMark (commonmark_x), as editors do", function()
+    write_file(t("flavor.mdz"), assert(mdzip.create({ files = {
+      { path = "index.md", text = "Intro text.\n- one\n- two\n### Next\n\n![A photo](images/x.png)\n\nSee [the guide](#agentsmd).\n\n## AGENTS.md\n\nUse @mdzip/core-js.\n" },
+      { path = "images/x.png", data = PNG },
+    } })))
+    local out = pandoc_ok("-f mdz.lua " .. q(t("flavor.mdz")) .. " -t html")
+    has(out, "<li>one</li>", "a list right after a paragraph")
+    has(out, '<h3 id="next">', "a heading right after a list")
+    lacks(out, "<figure", "no caption made from alt text")
+    has(out, 'id="agentsmd"', "editor-style heading identifiers")
+    lacks(out, 'class="citation"', "@names are not citations")
+    local pd = pandoc_ok("-f mdz.lua+pandoc " .. q(t("flavor.mdz")) .. " -t html")
+    has(pd, "<figure", "+pandoc reads Pandoc's Markdown")
+    has(pd, 'class="citation"', "+pandoc reads Pandoc's Markdown")
   end)
 
   check("read: +gfm uses GitHub-Flavored Markdown", function()

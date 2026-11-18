@@ -14,7 +14,7 @@ It's one Lua file, `mdz.lua`, used as a Pandoc [custom reader and writer](https:
 ## Setup
 
 1. Download `mdzip-pandoc-<version>.zip` from the [latest release](https://github.com/mdzip-project/mdzip-pandoc/releases/latest) and unzip it. It holds `mdz.lua`, the two filters and a copy of mdzip-core-lua, so there's nothing else to install.
-2. Pass the path of `mdz.lua` to `-f` or `-t`, for example `pandoc -f mdzip-pandoc-0.6.0/mdz.lua guide.mdz -o guide.docx`. Keep the `mdzip-core-lua` folder next to `mdz.lua`.
+2. Pass the path of `mdz.lua` to `-f` or `-t`, for example `pandoc -f mdzip-pandoc-0.7.0/mdz.lua guide.mdz -o guide.docx`. Keep the `mdzip-core-lua` folder next to `mdz.lua`.
 
 To use your own copy of mdzip-core-lua instead (a git checkout, or one installed with `luarocks install mdzip-core-lua`), set `MDZIP_LUA_PATH` to its `src` folder, or put the `mdzip-core-lua` folder next to `mdz.lua` or next to the folder `mdz.lua` is in.
 
@@ -29,18 +29,18 @@ Tested with Pandoc 3.13 (Lua 5.4).
 - The archive's **manifest** fills in metadata the document doesn't set itself: `title`, `author`, `lang`, `description`, `keywords` and `cover`. `cover` is the path of the manifest's cover picture in the media bag; in HTML, `mdz-images.lua` turns it into a link preview picture (see below).
 - A damaged or invalid archive stops Pandoc with the MDZip error code, for example `ERR_ENTRYPOINT_MISSING` or `ERR_ZIP_INVALID`.
 
-The Markdown is read as Pandoc's Markdown by default, which understands the most syntax. Add a switch to the format to change it:
+The Markdown is read as CommonMark with Pandoc's extensions (`commonmark_x`), so it comes out the way MDZip Studio, VS Code and Obsidian show it: a list or heading right after a paragraph is a list or heading, heading identifiers are the ones editors link to (`## AGENTS.md` is `#agentsmd`), and an image on its own line stays an image, not a figure captioned with its alt text. Footnotes, definition lists, math, fenced divs and `{width=50%}` attributes still work. Add a switch to the format to change it:
 
 | Switch | Effect |
 |---|---|
-| `-f mdz.lua+gfm` | Read GitHub-Flavored Markdown |
-| `-f mdz.lua+commonmark` | Read CommonMark with Pandoc's extensions (`commonmark_x`) |
-| `-f mdz.lua-raw_html` | Drop raw HTML |
+| `-f mdz.lua+gfm` | Read GitHub-Flavored Markdown: bare URLs become links, `~text~` is strikethrough |
+| `-f mdz.lua+pandoc` | Read Pandoc's Markdown (the default before 0.7.0): grid tables, figures with captions, citations |
+| `-f mdz.lua-raw_html` | Drop raw HTML, event-handler attributes and `javascript:` links |
 | `-f mdz.lua+combine` | Read the entry point and the documents it links to as one document |
 | `-f mdz.lua+combine+orphans` | Also add the documents nothing links to |
 | `-f mdz.lua+combine+pagebreaks` | Start each document on a new page |
 
-Raw HTML in the archive passes through to HTML output, as it does with Pandoc's own Markdown reader. For an `.mdz` from someone you don't trust, use `-raw_html` or sanitize the HTML output: it can contain scripts.
+Raw HTML in the archive passes through to HTML output, as it does with Pandoc's own readers. For an `.mdz` from someone you don't trust, use `-raw_html`: it removes raw HTML, `on...` event-handler attributes (`{onclick="..."}`) and `javascript:`, `vbscript:` and `data:text/html` links, with any of the reading switches. (Pandoc's own CommonMark and GFM readers ignore `-raw_html`, so `mdz.lua` does it itself.) For HTML you publish, a sanitizer is still the safer choice.
 
 ### Several files as one document
 

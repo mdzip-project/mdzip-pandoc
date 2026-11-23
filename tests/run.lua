@@ -29,17 +29,20 @@ local function lacks(s, needle, what) if tostring(s):find(needle, 1, true) then 
 
 local function q(s) return '"' .. s .. '"' end
 
--- Run a command; returns ok, combined output.
-local function run(args)
+-- Run a command; returns ok, combined output. `document`: MDZ_DOCUMENT for it.
+local function run(args, document)
   local cmd = q(PANDOC) .. " " .. args .. " 2>&1"
+  if document then
+    cmd = (windows and ('set "MDZ_DOCUMENT=' .. document .. '" && ') or ("MDZ_DOCUMENT='" .. document .. "' ")) .. cmd
+  end
   if windows then cmd = '"' .. cmd .. '"' end -- cmd.exe strips one outer pair of quotes
   local p = assert(io.popen(cmd, "r"))
   local out = p:read("a")
   local ok = p:close()
   return ok == true, out
 end
-local function pandoc_ok(args)
-  local ok, out = run(args)
+local function pandoc_ok(args, document)
+  local ok, out = run(args, document)
   if not ok then error("pandoc " .. args .. " failed:\n" .. out, 2) end
   return out
 end
@@ -105,6 +108,32 @@ pandoc.system.with_temporary_directory("mdz-lua-tests", function(tmp)
     has(out, "# Sample")
     has(out, "(images/pixel.png)")
     has(out, "(docs/chapter.md)", "links to other documents stay links")
+  end)
+
+  check("read: a first heading that is the title isn't shown twice; a different one stays", function()
+    write_file(t("titled.mdz"), assert(mdzip.create({
+      files = { { path = "index.md", text = "# Trip  Notes\n\nWe left early.\n\n# Day one\n\nRain.\n" } },
+      title = "Trip Notes",
+    })))
+    local html = pandoc_ok("-f mdz.lua " .. q(t("titled.mdz")) .. " -t html -s")
+    has(html, '<h1 class="title">Trip Notes</h1>')
+    lacks(html, 'id="trip-notes"', "the heading repeating the title")
+    has(html, "Day one", "later headings")
+    -- sample.mdz: "# Sample" isn't its title ("Sample archive"); both stay.
+    has(pandoc_ok("-f mdz.lua " .. q(t("sample.mdz")) .. " -t html -s"), 'id="sample"')
+
+    -- Word -> .mdz -> Word: a title block comes back once, as a title block.
+    write_file(t("report.md"), "---\ntitle: Quarterly Report\n---\n\n## Summary\n\nSales rose.\n")
+    pandoc_ok("-f markdown " .. q(t("report.md")) .. " -o " .. q(t("report.docx")))
+    pandoc_ok(q(t("report.docx")) .. " -t mdz.lua -o " .. q(t("report.mdz")))
+    pandoc_ok("-f mdz.lua " .. q(t("report.mdz")) .. " -o " .. q(t("report-again.docx")))
+    local xml = ""
+    for _, e in ipairs(pandoc.zip.Archive(read_file(t("report-again.docx"))).entries) do
+      if e.path == "word/document.xml" then xml = e:contents() end
+    end
+    local _, count = xml:gsub("Quarterly Report", "")
+    if count ~= 1 then error("the title once expected, got " .. count) end
+    has(xml, '<w:pStyle w:val="Title" />')
   end)
 
   check("read: images reach Word output through the media bag", function()
@@ -240,17 +269,60 @@ pandoc.system.with_temporary_directory("mdz-lua-tests", function(tmp)
     lacks(plain, "break-after", "no breaks without +pagebreaks")
   end)
 
-  check("read: +combine leaves project-mode archives alone", function()
-    write_file(t("project.mdz"), assert(mdzip.create({
-      files = {
-        { path = "index.md", text = "# Home\n\n[Other](other.md)\n" },
-        { path = "other.md", text = "# Other\n" },
-      },
-      mode = "project",
-    })))
-    local out = pandoc_ok("-f mdz.lua+combine " .. q(t("project.mdz")) .. " -t html")
-    has(out, "applies only to document-mode")
+  -- A project: separate documents. Home links to Other; Lone is linked from
+  -- nowhere. Each has a "notes" heading.
+  write_file(t("project.mdz"), assert(mdzip.create({
+    files = {
+      { path = "index.md", text = "# Home\n\n## Notes\n\n[Other](other.md)\n" },
+      { path = "other.md", text = "# Other\n\n## Notes\n\n[Home](index.md#notes)\n" },
+      { path = "notes/lone.md", text = "---\ntitle: Lone's own title\n---\n\n# Lone\n\nNobody links here.\n" },
+    },
+    mode = "project",
+    title = "Team Notes",
+  })))
+
+  check("read: a project converts its entry point and says how to get the rest", function()
+    local out = pandoc_ok("-f mdz.lua " .. q(t("project.mdz")) .. " -t html")
+    has(out, "project-mode archive; converting only its entry point, index.md (2 other documents left out")
+    has(out, "MDZ_DOCUMENT")
     lacks(out, "<h1 id=\"other\"")
+  end)
+
+  check("read: +combine collects a project's documents, each a part of its own", function()
+    local out = pandoc_ok("-f mdz.lua+combine " .. q(t("project.mdz")) .. " -t html -s")
+    local home, other, lone = out:find("Home</h1>", 1, true), out:find("Other</h1>", 1, true), out:find("Nobody links here", 1, true)
+    assert(home and other and lone and home < other and other < lone, "every document, linked ones first:\n" .. out)
+    has(out, 'class="mdz-document"', "each document is its own part")
+    has(out, 'id="notes-lone"')
+    has(out, 'href="#notes"', "links between documents work inside the collection")
+    has(out, "<title>Team Notes</title>", "the collection takes the manifest's title")
+    lacks(out, "Lone's own title", "not a document's own")
+    lacks(out, "WARNING")
+  end)
+
+  check("read: MDZ_DOCUMENT converts another document", function()
+    local out = pandoc_ok("-f mdz.lua " .. q(t("project.mdz")) .. " -t html", "notes/lone.md")
+    has(out, "Nobody links here")
+    lacks(out, "Home</h1>")
+    lacks(out, "WARNING", "no warning: you chose it")
+    -- by a relative path with backslashes, too, in a document-mode archive
+    out = pandoc_ok("-f mdz.lua " .. q(t("book.mdz")) .. " -t html", ".\\ch\\part-a.md")
+    has(out, "Part A</h1>")
+    lacks(out, "Part B")
+  end)
+
+  check("read: MDZ_DOCUMENT starts +combine from that document", function()
+    local out = pandoc_ok("-f mdz.lua+combine " .. q(t("book.mdz")) .. " -t html", "part-b.md")
+    local b, c = out:find("Part B", 1, true), out:find("Part C", 1, true)
+    assert(b and c and b < c, "part B, then C (linked from B):\n" .. out)
+    lacks(out, "<h1 id=\"book\"")
+  end)
+
+  check("read: MDZ_DOCUMENT naming no document fails and lists them", function()
+    local ok, out = run("-f mdz.lua " .. q(t("project.mdz")) .. " -t html", "missing.md")
+    eq(ok, false, "fails")
+    has(out, "MDZ_DOCUMENT names missing.md")
+    has(out, "notes/lone.md")
   end)
 
   -- A reference document with a marker in its styles, inside an archive.
@@ -328,6 +400,54 @@ pandoc.system.with_temporary_directory("mdz-lua-tests", function(tmp)
       assert(not without:find("onerror=\"", 1, true) and not without:find("onload=\"", 1, true), fmt .. ": event handler kept")
       assert(not without:find('href="javascript:', 1, true), fmt .. ": javascript: link kept")
     end
+  end)
+
+  check("read: a table written as HTML (block content in cells) reaches Word, images and all", function()
+    -- What the GFM writer makes of a Word layout table: Word output drops raw HTML.
+    write_file(t("html-table.mdz"), assert(mdzip.create({ files = {
+      { path = "index.md", text = '<table>\n<tbody>\n<tr>\n<td><h1 id="pitch">The Pitch</h1>\n<p>(consumer)</p></td>\n'
+        .. '<td><ol type="1">\n<li><p>Reminder</p></li>\n</ol>\n<p><img src="images/x.png" /></p></td>\n</tr>\n</tbody>\n</table>\n' },
+      { path = "images/x.png", data = PNG },
+    } })))
+    pandoc_ok("-f mdz.lua " .. q(t("html-table.mdz")) .. " -t docx.lua -o " .. q(t("html-table.docx")))
+    local body = word_part(t("html-table.docx"), "word/document.xml")
+    has(body, "<w:tbl>")
+    has(body, "The Pitch")
+    has(body, "Reminder")
+    has(zip_names(read_file(t("html-table.docx"))), "word/media/", "the picture in the cell")
+    -- HTML output gets a table too, and -raw_html still drops it.
+    has(pandoc_ok("-f mdz.lua " .. q(t("html-table.mdz")) .. " -t html"), "The Pitch")
+    lacks(pandoc_ok("-f mdz.lua-raw_html " .. q(t("html-table.mdz")) .. " -t html"), "The Pitch")
+  end)
+
+  check("read: a sized picture, a figure and formatting written as HTML reach Word", function()
+    write_file(t("html-bits.mdz"), assert(mdzip.create({ files = {
+      { path = "index.md", text = 'Plain <u>under</u> x<sup>2</sup> H<sub>2</sub>O <span class="mark">hi</span> '
+        .. '<span class="smallcaps">sc</span> <del>gone</del> <span class="other">kept</span> <u>unclosed\n\n'
+        .. '<img src="images/x.png" style="width:2in;height:1in" alt="block" />\n\n'
+        .. 'Text <img src="images/x.png" style="width:1in" alt="inline" /> more.\n\n'
+        .. '<figure><img src="images/x.png" alt="fig" /><figcaption>Figure 1: Sales</figcaption></figure>\n' },
+      { path = "images/x.png", data = PNG },
+    } })))
+    local native = pandoc_ok("-f mdz.lua " .. q(t("html-bits.mdz")) .. " -t native")
+    for _, el in ipairs({ "Underline", "Superscript", "Subscript", '"mark"', "SmallCaps", "Strikeout", "Figure" }) do
+      has(native, el)
+    end
+    has(native, '( "width" , "2in" )', "the size from the style")
+    has(native, '<span class=\\"other\\">', "a span with other attributes stays HTML")
+    has(native, '"<u>"', "a tag with no closing one stays HTML")
+    pandoc_ok("-f mdz.lua " .. q(t("html-bits.mdz")) .. " -t docx.lua -o " .. q(t("html-bits.docx")))
+    local body = word_part(t("html-bits.docx"), "word/document.xml")
+    local _, pictures = body:gsub("<w:drawing>", "")
+    eq(pictures, 3, "pictures in Word")
+    has(body, "w:vertAlign")
+    has(body, "w:highlight")
+    has(body, "Figure 1: Sales")
+    has(body, 'cx="1828800"', "2in wide")
+    -- -raw_html still drops them all.
+    local stripped = pandoc_ok("-f mdz.lua-raw_html " .. q(t("html-bits.mdz")) .. " -t native")
+    lacks(stripped, "Underline")
+    lacks(stripped, "Image")
   end)
 
   check("read: -raw_html also drops event-handler attributes and script links", function()
@@ -450,6 +570,229 @@ pandoc.system.with_temporary_directory("mdz-lua-tests", function(tmp)
     for _, f in ipairs(a:files()) do if f:find("^images/") then images = images + 1 end end
     eq(images >= 1, true, "images packaged (" .. images .. ")")
     eq(a:validate().valid, true)
+  end)
+
+  check("write: a picture sharing a run with another drawing isn't lost, and a heading of pictures is a paragraph", function()
+    -- A logo on a banner: Word puts both drawings in one run, in a heading,
+    -- and Pandoc's Word reader keeps only the first.
+    write_file(t("logo.png"), PNG)
+    write_file(t("logo.md"), "# ![logo](" .. t("logo.png") .. ")\n\nText.\n")
+    pandoc_ok("-f markdown " .. q(t("logo.md")) .. " -o " .. q(t("logo-one.docx")))
+    local entries = {}
+    for _, e in ipairs(pandoc.zip.Archive(read_file(t("logo-one.docx"))).entries) do
+      local contents = e:contents()
+      if e.path == "word/document.xml" then
+        local drawing = contents:match("<w:drawing>.-</w:drawing>")
+        contents = contents:gsub("<w:drawing>.-</w:drawing>", function(d) return d .. d end, 1)
+        assert(drawing, "a drawing to copy")
+      end
+      entries[#entries + 1] = pandoc.zip.Entry(e.path, contents)
+    end
+    write_file(t("logo-two.docx"), pandoc.zip.Archive(entries):bytestring())
+    pandoc_ok(q(t("logo-two.docx")) .. " -t mdz.lua -o " .. q(t("logo.mdz")))
+    local md = assert(assert(mdzip.open(read_file(t("logo.mdz")))):read_text("index.md"))
+    local _, count = md:gsub("!%[logo%]", "")
+    if count ~= 2 then error("both pictures expected, got " .. count .. ":\n" .. md) end
+    lacks(md, "# !", "a heading of pictures")
+    has(md, "Text.")
+  end)
+
+  check("write: a picture drawn on a shape keeps the shape's fill behind it (+image_sizes)", function()
+    -- A white logo on a blue banner: Pandoc keeps the logo, not the banner.
+    write_file(t("logo.png"), PNG)
+    write_file(t("banner.md"), "![logo](" .. t("logo.png") .. ")\n\nText.\n")
+    pandoc_ok("-f markdown " .. q(t("banner.md")) .. " -o " .. q(t("banner-plain.docx")))
+    local shape = '<mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><wp:anchor><a:graphic><a:graphicData>'
+      .. '<wps:wsp><wps:spPr><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="0082c9"/></a:gs>'
+      .. '<a:gs pos="100000"><a:srgbClr val="1cafff"/></a:gs></a:gsLst><a:lin ang="20280000" scaled="0"/></a:gradFill>'
+      .. '</wps:spPr></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice>'
+      .. '<mc:Fallback/></mc:AlternateContent>'
+    local entries = {}
+    for _, e in ipairs(pandoc.zip.Archive(read_file(t("banner-plain.docx"))).entries) do
+      local contents = e:contents()
+      if e.path == "word/document.xml" then
+        contents = contents:gsub("<w:drawing>", function(d) return shape .. d end, 1)
+        contents = contents:gsub("<w:document ", '<w:document xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" '
+          .. 'xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" ', 1)
+      end
+      entries[#entries + 1] = pandoc.zip.Entry(e.path, contents)
+    end
+    write_file(t("banner.docx"), pandoc.zip.Archive(entries):bytestring())
+    pandoc_ok(q(t("banner.docx")) .. " -t mdz.lua+image_sizes -o " .. q(t("banner.mdz")))
+    local md = assert(assert(mdzip.open(read_file(t("banner.mdz")))):read_text("index.md"))
+    has(md, '<div class="mdz-backdrop"')
+    has(md, "linear-gradient(68deg, #0082C9 0%, #1CAFFF 100%)")
+    has(md, "logo")
+    -- Plain Markdown by default: no backdrop.
+    pandoc_ok(q(t("banner.docx")) .. " -t mdz.lua -o " .. q(t("banner-md.mdz")))
+    lacks(assert(assert(mdzip.open(read_file(t("banner-md.mdz")))):read_text("index.md")), "mdz-backdrop", "a backdrop")
+  end)
+
+  check("write: +notes says where the document came from and what didn't come across", function()
+    -- The banner document, with a comment, tracked changes, a PAGE field and a
+    -- footer added.
+    local W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+    local entries = {}
+    for _, e in ipairs(pandoc.zip.Archive(read_file(t("banner.docx"))).entries) do
+      local contents = e:contents()
+      if e.path == "word/document.xml" then
+        contents = contents:gsub("</w:body>", '<w:p><w:ins w:id="1" w:author="A"><w:r><w:t>new</w:t></w:r></w:ins>'
+          .. '<w:del w:id="2" w:author="A"><w:r><w:delText>old</w:delText></w:r></w:del>'
+          .. '<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>'
+          .. '<w:r><w:instrText> HYPERLINK "https://example.com" </w:instrText></w:r></w:p></w:body>', 1)
+      elseif e.path == "word/comments.xml" then -- Pandoc writes an empty one
+        contents = "<w:comments " .. W .. '><w:comment w:id="0" w:author="A"/></w:comments>'
+      end
+      entries[#entries + 1] = pandoc.zip.Entry(e.path, contents)
+    end
+    entries[#entries + 1] = pandoc.zip.Entry("word/footer1.xml", "<w:ftr " .. W .. "><w:p><w:r><w:t>Company</w:t></w:r></w:p></w:ftr>")
+    write_file(t("Report.docx"), pandoc.zip.Archive(entries):bytestring())
+
+    pandoc_ok(q(t("Report.docx")) .. " -t mdz.lua+image_sizes+notes -o " .. q(t("report-notes.mdz")))
+    local a = assert(mdzip.open(read_file(t("report-notes.mdz"))))
+    local notes = assert(a:read_text("sources/conversion-notes.md"))
+    has(notes, "**Original:** `Report.docx` (Word document, ")
+    lacks(notes, tmp, "the folder it was in")
+    has(notes, "**SHA-1:** `" .. pandoc.utils.sha1(read_file(t("Report.docx"))) .. "`")
+    has(notes, "mdz.lua " .. read_file("mdz.lua"):match('VERSION = "([^"]+)"'))
+    has(notes, "`+image_sizes`")
+    has(notes, "**Comments:** 1 comment")
+    has(notes, "1 insertion and 1 deletion")
+    has(notes, "**Shapes:** 1 shape")
+    has(notes, "1 picture drawn on one keeps its colour")
+    has(notes, "**Fields** (PAGE)")
+    has(notes, "**Headers and footers:** 1 header or footer with text")
+    has(notes, "`images/`: 1 picture.")
+    lacks(a:read_text("index.md"), "Conversion notes", "the notes aren't in the document")
+
+    -- Off by default; and from Markdown, no Word section.
+    pandoc_ok(q(t("Report.docx")) .. " -t mdz.lua -o " .. q(t("report-plain.mdz")))
+    lacks(zip_names(read_file(t("report-plain.mdz"))), "conversion-notes", "notes without +notes")
+    pandoc_ok(q(t("banner.md")) .. " -t mdz.lua+notes -o " .. q(t("md-notes.mdz")))
+    local md_notes = assert(assert(mdzip.open(read_file(t("md-notes.mdz")))):read_text("sources/conversion-notes.md"))
+    has(md_notes, "(Markdown, ")
+    lacks(md_notes, "## What didn't come across", "a Word section")
+  end)
+
+  check("write: an older Word picture (VML) keeps the size the document shows it at", function()
+    -- A Word file whose picture is <w:pict><v:shape style="width:72pt;..."> instead
+    -- of DrawingML: Pandoc's Word reader gives it no size.
+    write_file(t("big.png"), PNG)
+    write_file(t("vml.md"), "![](" .. t("big.png") .. ")\n")
+    pandoc_ok("-f markdown " .. q(t("vml.md")) .. " -o " .. q(t("drawing.docx")))
+    local archive = pandoc.zip.Archive(read_file(t("drawing.docx")))
+    local entries = {}
+    for _, e in ipairs(archive.entries) do
+      local contents = e:contents()
+      if e.path == "word/document.xml" then
+        local id = contents:match('r:embed="([^"]+)"')
+        contents = contents:gsub("<w:drawing>.-</w:drawing>", '<w:pict><v:shape id="p1" style="width:72pt;height:36pt">'
+          .. '<v:imagedata r:id="' .. id .. '"/></v:shape></w:pict>', 1)
+        contents = contents:gsub("<w:document ", '<w:document xmlns:v="urn:schemas-microsoft-com:vml" ', 1)
+      end
+      entries[#entries + 1] = pandoc.zip.Entry(e.path, contents)
+    end
+    write_file(t("vml.docx"), pandoc.zip.Archive(entries):bytestring())
+    pandoc_ok(q(t("vml.docx")) .. " -t mdz.lua+image_sizes -o " .. q(t("vml.mdz")))
+    local md = assert(assert(mdzip.open(read_file(t("vml.mdz")))):read_text("index.md"))
+    has(md, "width:1in;height:0.5in")
+  end)
+
+  check("write: table_look keeps Word's cell shading and unusual table lines; docx.lua puts them back", function()
+    -- Three tables in Word: two with black lines (the usual look), one with
+    -- blue lines; a cell of the first shaded with Word's 20% pattern.
+    write_file(t("looks.md"), "| A | B |\n|---|---|\n| 1 | 2 |\n\nText.\n\n| C | D |\n|---|---|\n| 3 | 4 |\n\nMore.\n\n| E | F |\n|---|---|\n| 5 | 6 |\n")
+    pandoc_ok("-f markdown " .. q(t("looks.md")) .. " -o " .. q(t("looks-plain.docx")))
+    local function borders(colour)
+      local parts = {}
+      for _, edge in ipairs({ "top", "left", "bottom", "right", "insideH", "insideV" }) do
+        parts[#parts + 1] = "<w:" .. edge .. ' w:val="single" w:sz="4" w:space="0" w:color="' .. colour .. '"/>'
+      end
+      return "<w:tblBorders>" .. table.concat(parts) .. "</w:tblBorders>"
+    end
+    local entries = {}
+    for _, e in ipairs(pandoc.zip.Archive(read_file(t("looks-plain.docx"))).entries) do
+      local contents = e:contents()
+      if e.path == "word/document.xml" then
+        local n = 0
+        contents = contents:gsub("<w:tblPr>", function()
+          n = n + 1
+          return "<w:tblPr>" .. borders(n == 3 and "8EAADB" or "000000")
+        end)
+        contents = contents:gsub("<w:tc>%s*<w:tcPr%s*/>", '<w:tc><w:tcPr><w:shd w:val="pct20" w:color="auto" w:fill="FFFFFF"/></w:tcPr>', 1)
+      end
+      entries[#entries + 1] = pandoc.zip.Entry(e.path, contents)
+    end
+    write_file(t("looks.docx"), pandoc.zip.Archive(entries):bytestring())
+
+    pandoc_ok(q(t("looks.docx")) .. " -t mdz.lua+table_look -o " .. q(t("looks.mdz")))
+    local md = assert(assert(mdzip.open(read_file(t("looks.mdz")))):read_text("index.md"))
+    has(md, "background-color:#CCCCCC", "the shaded cell")
+    has(md, 'data-word-borders="top:single/4/8EAADB', "the blue table's lines")
+    lacks(md, "000000", "the usual lines are the reference document's business")
+    has(md, "| C   | D   |", "a table with the usual look stays Markdown")
+
+    pandoc_ok("-f mdz.lua " .. q(t("looks.mdz")) .. " -t docx.lua -o " .. q(t("looks-out.docx")))
+    local body = word_part(t("looks-out.docx"), "word/document.xml")
+    has(body, 'w:fill="CCCCCC"')
+    has(body, 'w:color="8EAADB"')
+
+    pandoc_ok(q(t("looks.docx")) .. " -t mdz.lua -o " .. q(t("looks-off.mdz")))
+    md = assert(assert(mdzip.open(read_file(t("looks-off.mdz")))):read_text("index.md"))
+    lacks(md, "<table", "without table_look: Markdown tables")
+  end)
+
+  check("write: plain Markdown by default; +html_tables, +image_sizes and +html_formatting keep HTML", function()
+    write_file(t("pic.png"), PNG)
+    write_file(t("rich.html"), '<p><img src="' .. t("pic.png") .. '" width="200" alt="pic"> <u>under</u> x<sup>2</sup></p>'
+      .. '<table><tr><td colspan="2"><h2>Wide</h2><p>two</p></td></tr><tr><td><ul><li>a</li><li>b</li></ul></td><td>c</td></tr></table>')
+    pandoc_ok(q(t("rich.html")) .. " -t mdz.lua+html_tables+image_sizes+html_formatting -o " .. q(t("rich.mdz")))
+    local md = assert(assert(mdzip.open(read_file(t("rich.mdz")))):read_text("index.md"))
+    has(md, "<table", "+html_tables")
+    has(md, "<img", "+image_sizes")
+    has(md, "<u>", "+html_formatting")
+    pandoc_ok(q(t("rich.html")) .. " -t mdz.lua -o " .. q(t("rich-plain.mdz")))
+    md = assert(assert(mdzip.open(read_file(t("rich-plain.mdz")))):read_text("index.md"))
+    lacks(md, "<")
+    has(md, "![pic](images/")
+    has(md, "under x2")
+    has(md, "| **Wide** two |")
+    has(md, "| a; b")
+  end)
+
+  check("write: a srcset points into the archive, or goes if one of its pictures is missing (EPUB)", function()
+    write_file(t("pic.png"), PNG)
+    local pic = t("pic.png"):gsub("\\", "/")
+    local gone = t("gone.png"):gsub("\\", "/")
+    local function image(alt, set)
+      return 'Image ("",[],[("srcset","' .. set .. '")]) [Str "' .. alt .. '"] ("' .. pic .. '","")'
+    end
+    write_file(t("srcset.native"), "[Para [" .. image("kept", pic .. " 1x, " .. pic .. " 2x") .. "]"
+      .. ", Para [" .. image("dropped", pic .. " 1x, " .. gone .. " 2x") .. "]"
+      .. ', RawBlock (Format "html") "<img src=\\"' .. pic .. '\\" srcset=\\"' .. gone .. ' 2x\\" alt=\\"raw\\">"]')
+    local out = pandoc_ok("-f native " .. q(t("srcset.native")) .. " -t mdz.lua -o " .. q(t("srcset.mdz")))
+    local archive = assert(mdzip.open(read_file(t("srcset.mdz"))))
+    local md = assert(archive:read_text("index.md"))
+    has(md, 'srcset="images/pic.png 1x, images/pic.png 2x"', "every picture found: srcset rewritten")
+    lacks(md, "gone.png", "a missing picture: srcset dropped, src shown")
+    has(md, '<img src="images/pic.png" alt="raw"', "raw HTML: srcset dropped too")
+    lacks(out, "gone.png", "no warning for a srcset picture")
+    has(zip_names(read_file(t("srcset.mdz"))), "images/pic.png")
+  end)
+
+  check("write: a link inside a link (a Word table of contents) keeps the inner one's text", function()
+    write_file(t("toc.native"), '[Para [Link ("",[],[]) [Str "Intro", Space, Link ("",[],[]) [Str "2"] ("#intro","")] ("#intro","")]]')
+    pandoc_ok("-f native " .. q(t("toc.native")) .. " -t mdz.lua -o " .. q(t("toc.mdz")))
+    has(assert(assert(mdzip.open(read_file(t("toc.mdz")))):read_text("index.md")), "[Intro 2](#intro)")
+  end)
+
+  check("write: a captioned picture keeps its caption, as a paragraph under it", function()
+    write_file(t("pic.png"), PNG)
+    write_file(t("fig.md"), "![](" .. t("pic.png") .. ")\n\nBefore.\n\n![Figure 1: Sales](" .. t("pic.png") .. ")\n\nAfter.\n")
+    pandoc_ok("-f markdown " .. q(t("fig.md")) .. " -t mdz.lua -o " .. q(t("fig.mdz")))
+    local md = assert(assert(mdzip.open(read_file(t("fig.mdz")))):read_text("index.md"))
+    lacks(md, "<figure", "no HTML figure")
+    has(md, "\n\nFigure 1: Sales\n", "the caption")
   end)
 
   check("write: +pandoc writes Pandoc's Markdown", function()
